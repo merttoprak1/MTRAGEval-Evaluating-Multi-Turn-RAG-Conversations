@@ -88,7 +88,8 @@ def main():
     # Provider Selection
     st.sidebar.subheader("LLM Configuration")
     # Default to Local (index 1)
-    provider = st.sidebar.selectbox("Select LLM Provider", ["OpenAI", "Local"], index=1)
+    # Default to Gemini (index 1) as requested
+    provider = st.sidebar.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=1)
     
     api_key = None
     base_url = None
@@ -97,6 +98,9 @@ def main():
     if provider == "OpenAI":
         api_key = st.sidebar.text_input("OpenAI API Key", type="password")
         model_name = st.sidebar.text_input("Model Name", value="gpt-3.5-turbo")
+    elif provider == "Gemini":
+        api_key = st.sidebar.text_input("Google API Key", type="password")
+        model_name = st.sidebar.text_input("Model Name", value="gemini-flash-latest")
     else:
         base_url = st.sidebar.text_input("Local LLM Base URL", value="http://localhost:1234/v1")
         model_name = st.sidebar.text_input("Model Name", value="QuantFactory/Meta-Llama-3-8B-Instruct-GGUF")
@@ -104,8 +108,8 @@ def main():
 
     # Embedding Configuration
     st.sidebar.subheader("Embedding Configuration")
-    # Default to Local (index 1)
-    embedding_provider = st.sidebar.selectbox("Select Embedding Provider", ["OpenAI", "Local (Ollama)"], index=1)
+    # Default to Gemini (index 1)
+    embedding_provider = st.sidebar.selectbox("Select Embedding Provider", ["OpenAI", "Gemini", "Local (Ollama)"], index=1)
     embedding_config = {}
 
     if embedding_provider == "OpenAI":
@@ -118,6 +122,18 @@ def main():
         embedding_config = {
             "provider": "OpenAI",
             "api_key": embedding_api_key
+        }
+    elif embedding_provider == "Gemini":
+        # Reuse API key if confirmed Gemini, or ask
+        if provider == "Gemini" and api_key:
+            embedding_api_key = api_key
+        else:
+            embedding_api_key = st.sidebar.text_input("Gemini Embedding API Key", type="password")
+            
+        embedding_config = {
+             "provider": "Gemini",
+             "api_key": embedding_api_key,
+             "model_name": "models/text-embedding-004"
         }
     else:
         # Local Ollama

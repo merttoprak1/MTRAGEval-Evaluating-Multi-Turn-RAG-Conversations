@@ -2,3 +2,6 @@
 *.db
 *.sqlite3
 *.log
+__pycache__/
+faiss_db_*/
+.env
