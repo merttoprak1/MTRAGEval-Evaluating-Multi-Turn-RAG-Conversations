@@ -1,13 +1,13 @@
 # Modular RAG Chatbot
 
-A modular Retrieval-Augmented Generation (RAG) chatbot built with Streamlit, LangChain, and ChromaDB. This application supports multiple LLM providers, including OpenAI and local models via LM Studio and Ollama.
+A modular Retrieval-Augmented Generation (RAG) chatbot built with Streamlit, LangChain, and FAISS. This application supports multiple LLM providers, including Google Gemini, OpenAI, and local models via LM Studio and Ollama.
 
 ## Features
 
-- **Modular Design**: Easily switch between OpenAI and local LLMs.
+- **Multi-Provider Support**: Switch between Google Gemini, OpenAI, and local LLMs (Ollama/LM Studio).
 - **RAG Capabilities**: Upload JSON/JSONL documents to chat with your data.
+- **Efficient Vector Store**: Uses FAISS (local file-based) for fast document retrieval and compatibility.
 - **Session Management**: Create, rename, and delete chat sessions.
-- **Vector Store**: Uses ChromaDB for efficient document retrieval.
 - **Database Inspector**: Built-in tools to inspect chat history and sessions.
 
 ## Prerequisites
@@ -51,6 +51,13 @@ A modular Retrieval-Augmented Generation (RAG) chatbot built with Streamlit, Lan
 
 ## Configuration
 
+### Google Gemini (Recommended)
+
+1.  Select **Gemini** as the LLM Provider in the sidebar.
+2.  Enter your **Google API Key**.
+3.  (Optional) Specify a model name (default: `gemini-flash-latest`).
+4.  For Embeddings, select **Gemini** in the Embedding Configuration section (reuses API Key).
+
 ### OpenAI
 
 1.  Select **OpenAI** as the LLM Provider in the sidebar.
@@ -92,5 +99,6 @@ You can run this chatbot with local models using either LM Studio or Ollama.
 ## Data Ingestion
 
 1.  Upload a `.json` or `.jsonl` file in the sidebar.
-2.  Click **Process File** to ingest documents into the vector store.
+2.  Click **Process File** to ingest documents into the FAISS vector store.
+    - *Note: If using Gemini Embeddings, processing is rate-limited (10 docs / 5s) to respect free tier quotas.*
 3.  Start chatting!
