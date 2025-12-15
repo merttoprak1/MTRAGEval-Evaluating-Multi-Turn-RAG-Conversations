@@ -1,53 +1,104 @@
-# *ACL Paper Styles
+# Modular RAG Chatbot
 
-This directory contains the latest LaTeX and Word templates for *ACL
-conferences.
+A modular Retrieval-Augmented Generation (RAG) chatbot built with Streamlit, LangChain, and FAISS. This application supports multiple LLM providers, including Google Gemini, OpenAI, and local models via LM Studio and Ollama.
 
-## Instructions for authors
+## Features
 
-Paper submissions to *ACL conferences must use the official ACL style
-templates.
+- **Multi-Provider Support**: Switch between Google Gemini, OpenAI, and local LLMs (Ollama/LM Studio).
+- **RAG Capabilities**: Upload JSON/JSONL documents to chat with your data.
+- **Efficient Vector Store**: Uses FAISS (local file-based) for fast document retrieval and compatibility.
+- **Session Management**: Create, rename, and delete chat sessions.
+- **Database Inspector**: Built-in tools to inspect chat history and sessions.
 
-The LaTeX style files are available
+## Prerequisites
 
-- as an [Overleaf template](https://www.overleaf.com/latex/templates/association-for-computational-linguistics-acl-conference/jvxskxpnznfj)
-- in this repository, in the [`latex`](https://github.com/acl-org/acl-style-files/blob/master/latex) subdirectory
-- as a [.zip file](https://github.com/acl-org/acl-style-files/archive/refs/heads/master.zip)
+- Python 3.8 or higher
+- [Ollama](https://ollama.com/) (optional, for local embeddings/inference)
+- [LM Studio](https://lmstudio.ai/) (optional, for local inference)
 
-Please see [`latex/acl_latex.tex`](https://github.com/acl-org/acl-style-files/blob/master/latex/acl_latex.tex) for an example.
+## Installation
 
-The Microsoft Word template is available in this repository at [`word/acl.docx`](https://github.com/acl-org/acl-style-files/blob/master/word/acl.docx).
+1.  **Clone the repository:**
 
-Please follow the paper formatting guidelines general to *ACL
-conferences:
+    ```bash
+    git clone <repository-url>
+    cd <repository-directory>
+    ```
 
-- [Paper formatting guidelines](https://acl-org.github.io/ACLPUB/formatting.html)
+2.  **Create and activate a virtual environment (recommended):**
 
-Authors may not modify these style files or use templates designed for
-other conferences.
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
 
-## Instructions for publications chairs
+3.  **Install dependencies:**
 
-To adapt the style files for your conference, please fork this repository and
-make necessary changes. Minimally, you'll need to update the name of
-the conference and rename the files.
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-If you make improvements to the templates that should be propagated to
-future conferences, please submit a pull request. Thank you in
-advance!
+## Usage
 
-In older versions of the templates, authors were asked to fill in the
-START submission ID so that it would be stamped at the top of each
-page of the anonymized version. This is no longer needed, because it
-is now possible to do this stamping automatically within
-START. Currently, the way to do this is for the program chair to email
-support@softconf.com and request it.
+1.  **Run the application:**
 
-## Instructions for making changes to style files
+    ```bash
+    streamlit run app.py
+    ```
 
-- merge pull request in github, or push to github
-- git pull from github to a local repository
-- then, git push from your local repository to overleaf project 
-    - Overleaf project is https://www.overleaf.com/project/5f64f1fb97c4c50001b60549
-    - Overleaf git url is https://git.overleaf.com/5f64f1fb97c4c50001b60549
-- then, click "Submit" and then "Sumbit as Template" in overleaf in order to ask overleaf to update the overleaf template from the overleaf project 
+2.  **Open your browser:**
+    The application will typically run at `http://localhost:8501`.
+
+## Configuration
+
+### Google Gemini (Recommended)
+
+1.  Select **Gemini** as the LLM Provider in the sidebar.
+2.  Enter your **Google API Key**.
+3.  (Optional) Specify a model name (default: `gemini-flash-latest`).
+4.  For Embeddings, select **Gemini** in the Embedding Configuration section (reuses API Key).
+
+### OpenAI
+
+1.  Select **OpenAI** as the LLM Provider in the sidebar.
+2.  Enter your **OpenAI API Key**.
+3.  (Optional) Specify a model name (default: `gpt-3.5-turbo`).
+
+### Local LLMs
+
+You can run this chatbot with local models using either LM Studio or Ollama.
+
+#### LM Studio
+
+1.  **Download and Install**: Get [LM Studio](https://lmstudio.ai/).
+2.  **Load a Model**: Download and load a model (e.g., Llama 3, Mistral).
+3.  **Start Server**:
+    - Go to the "Local Server" tab (double-headed arrow icon).
+    - Ensure the server port is `1234` (default).
+    - Click **Start Server**.
+4.  **Configure Chatbot**:
+    - In the chatbot sidebar, select **Local** as the LLM Provider.
+    - Set **Local LLM Base URL** to `http://localhost:1234/v1`.
+    - Set **Model Name** to the model you loaded (e.g., `QuantFactory/Meta-Llama-3-8B-Instruct-GGUF`).
+
+#### Ollama
+
+1.  **Download and Install**: Get [Ollama](https://ollama.com/).
+2.  **Pull a Model**: Run `ollama pull llama3` (or your preferred model) in your terminal.
+3.  **Start Ollama**: Ensure Ollama is running (usually runs in the background).
+4.  **Configure Chatbot**:
+    - **For Chat**:
+        - Select **Local** as the LLM Provider.
+        - Set **Local LLM Base URL** to `http://localhost:11434/v1`.
+        - Set **Model Name** to your pulled model (e.g., `llama3`).
+    - **For Embeddings**:
+        - Select **Local (Ollama)** as the Embedding Provider.
+        - Set **Embedding Base URL** to `http://localhost:11434`.
+        - Set **Embedding Model** to a text embedding model (e.g., `nomic-embed-text` or `mxbai-embed-large`). *Note: You may need to pull these models first via `ollama pull nomic-embed-text`.*
+
+## Data Ingestion
+
+1.  Upload a `.json` or `.jsonl` file in the sidebar.
+2.  Click **Process File** to ingest documents into the FAISS vector store.
+    - *Note: If using Gemini Embeddings, processing is rate-limited (10 docs / 5s) to respect free tier quotas.*
+3.  Start chatting!
