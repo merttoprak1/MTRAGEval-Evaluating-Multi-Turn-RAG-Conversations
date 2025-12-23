@@ -13,6 +13,7 @@ from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
 from src.evaluation import run_evaluation, EvaluationResult
 from src.database import init_db, create_session, get_sessions, save_message, load_session_history, delete_session, rename_session
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
 # Configure logging
 logging.basicConfig(
@@ -328,6 +329,7 @@ def main():
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         tmp_file_path = tmp_file.name
+                        
                     
                     # Ingest and Chunk
                     documents = load_json_documents(tmp_file_path)
@@ -387,7 +389,7 @@ def main():
         task_options = {
             None: "-- Select a Task --",
             "A": "Task A: Retrieval Only",
-            "B": "Task B: Retrieval + Generation",
+            "B": "Task B: Generation",
             "C": "Task C: Rewrite + Retrieval + Generation"
         }
         
@@ -443,7 +445,7 @@ def main():
                     }
             
             # Task A, B, C: Retrieval component
-            if selected_task in ["A", "B", "C"]:
+            if selected_task in ["A", "C"]:
                 with st.expander("🔍 Retrieval Configuration", expanded=True):
                     st.session_state.selected_components["retriever"] = {
                         "top_k": st.slider("Top K Results", 1, 20, 5),
@@ -453,6 +455,21 @@ def main():
             
             # Task B, C: Generation component
             if selected_task in ["B", "C"]:
+                # get reference.jsonl
+                uploaded_file = st.file_uploader("Upload input File", type=["json", "jsonl"])
+
+                if uploaded_file:
+                    try:
+                        # Save uploaded file to temp file
+                        suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                            tmp_file.write(uploaded_file.getvalue())
+                            tmp_file_path = tmp_file.name
+                            st.session_state.test_file_path = tmp_file_path
+                    except Exception as e:
+                        logger.error(f"Error processing file: {e}", exc_info=True)
+                        st.error(f"Error processing file: {e}")
+                                
                 with st.expander("🤖 Generation Configuration", expanded=True):
                     # LLM Model Lists
                     OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
@@ -536,21 +553,21 @@ Detailed Answer:""",
             
             st.divider()
             
-            # Test Query Input
-            test_query = st.text_input(
-                "🔤 Test Query", 
-                placeholder="Enter a query to test the pipeline...",
-                key="test_query_input"
-            )
+            # # Test Query Input
+            # test_query = st.text_input(
+            #     "🔤 Test Query", 
+            #     placeholder="Enter a query to test the pipeline...",
+            #     key="test_query_input"
+            # )
             
             # Run Button
             if st.button("▶️ Run Pipeline", type="primary"):
-                if not test_query:
-                    st.warning("⚠️ Please enter a test query.")
-                elif st.session_state.vector_store is None:
+                # if not test_query:
+                #     st.warning("⚠️ Please enter a test query.")
+                if st.session_state.vector_store is not None:
                     st.error("❌ No vector store loaded. Please upload and process documents first.")
-                elif selected_task in ["B", "C"] and not api_key:
-                    st.error("❌ API key required for generation. Please provide it in the sidebar.")
+                # elif selected_task in ["B", "C"] and not api_key:
+                #     st.error("❌ API key required for generation. Please provide it in the sidebar.")
                 else:
                     # Create progress container
                     progress_container = st.empty()
@@ -566,7 +583,7 @@ Detailed Answer:""",
                         config_snapshot = {
                             "timestamp": datetime.now().isoformat(),
                             "task": selected_task,
-                            "query": test_query,
+                            # "query": test_query,
                             "llm_provider": provider,
                             "llm_model": model_name,
                             "embedding_provider": embedding_provider,
@@ -579,7 +596,7 @@ Detailed Answer:""",
                         
                         run_result = {
                             "task": selected_task,
-                            "query": test_query,
+                            # "query": test_query,
                             "config_snapshot": config_snapshot,
                             "components": st.session_state.selected_components,
                             "status": "running",
@@ -587,7 +604,7 @@ Detailed Answer:""",
                         }
                         
                         # Progress tracking
-                        total_steps = 1  # Retrieval
+                        total_steps = 1  # Retrieval# 
                         if selected_task == "C":
                             total_steps += 1  # Rewrite
                         if selected_task in ["B", "C"]:
@@ -596,7 +613,7 @@ Detailed Answer:""",
                         current_step = 0
                         
                         # Determine the query to use for retrieval
-                        retrieval_query = test_query
+                        # retrieval_query = test_query 
                         
                         # Task C: Execute Query Rewrite first
                         if selected_task == "C":
@@ -615,7 +632,7 @@ Detailed Answer:""",
                             
                             # Execute rewrite
                             rewrite_result = rewrite_query(
-                                query=test_query,
+                                # query=test_query,
                                 method=rewrite_method,
                                 llm=rewrite_llm,
                                 enabled=rewrite_enabled,
@@ -639,8 +656,8 @@ Detailed Answer:""",
                             
                             st.caption(f"Method: {rewrite_result['method']} | Enabled: {rewrite_result['enabled']}")
                         
-                        # ==================== TASK A, B, C: RETRIEVAL ====================
-                        if selected_task in ["A", "B", "C"]:
+                        # ==================== TASK A, C: RETRIEVAL ====================
+                        if selected_task in ["A", "C"]:
                             retriever_config = st.session_state.selected_components.get("retriever", {})
                             top_k = retriever_config.get("top_k", 5)
                             search_type = retriever_config.get("search_type", "similarity")
@@ -751,15 +768,15 @@ Detailed Answer:""",
                                 st.error(f"❌ Retrieval failed: {e}")
                                 logger.error(f"Retrieval error: {e}", exc_info=True)
                                 run_result["retrieval"] = {"error": str(e)}
-                        
+
                         # ==================== TASK B, C: GENERATION ====================
                         if selected_task in ["B", "C"]:
                             st.subheader("🤖 Generation")
                             
                             # Check if we have retrieved docs
                             retrieved_docs = run_result.get("retrieved_docs", [])
-                            
-                            if not retrieved_docs:
+                            # TODO: fix if not retrieved_docs
+                            if retrieved_docs:
                                 st.warning("⚠️ No retrieved documents to use as context. Skipping generation.")
                             else:
                                 try:
@@ -770,100 +787,183 @@ Detailed Answer:""",
                                     prompt_template = gen_config.get("prompt_template", "")
                                     prompt_template_name = gen_config.get("prompt_template_name", "Default RAG")
                                     
-                                    # Build context from retrieved docs
-                                    context_parts = []
-                                    for i, doc in enumerate(retrieved_docs):
-                                        source = doc.metadata.get('source', doc.metadata.get('title', f'Document {i+1}'))
-                                        context_parts.append(f"[{i+1}] {source}:\n{doc.page_content}")
-                                    
-                                    context = "\n\n".join(context_parts)
-                                    
-                                    # Format the prompt
-                                    formatted_prompt = prompt_template.format(
-                                        context=context,
-                                        question=retrieval_query
-                                    )
+                                    task_b_output = []
                                     
                                     # Initialize LLM
                                     gen_start = time.time()
                                     llm = get_llm(provider, api_key, base_url, gen_model)
                                     
-                                    # Generate response
-                                    from langchain_core.messages import HumanMessage
-                                    response = llm.invoke([HumanMessage(content=formatted_prompt)])
-                                    gen_time = time.time() - gen_start
+                                    # # Build context from retrieved docs
+                                    # context_parts = []
+                                    # for i, doc in enumerate(retrieved_docs):
+                                    #     source = doc.metadata.get('source', doc.metadata.get('title', f'Document {i+1}'))
+                                    #     context_parts.append(f"[{i+1}] {source}:\n{doc.page_content}")
                                     
-                                    # Extract answer
-                                    answer = response.content if hasattr(response, 'content') else str(response)
+                                    # context = "\n\n".join(context_parts)
                                     
-                                    # Store generation result
-                                    run_result["generation"] = {
-                                        "model": gen_model,
-                                        "provider": provider,
-                                        "temperature": gen_temperature,
-                                        "max_tokens": gen_max_tokens,
-                                        "prompt_template_name": prompt_template_name,
-                                        "context_length": len(context),
-                                        "num_context_docs": len(retrieved_docs),
-                                        "answer": answer,
-                                        "generation_time_ms": round(gen_time * 1000, 2)
-                                    }
-                                    
-                                    # Display generation stats
-                                    gen_stat_col1, gen_stat_col2, gen_stat_col3 = st.columns(3)
-                                    with gen_stat_col1:
-                                        st.metric("🤖 Model", gen_model[:20] + "..." if len(gen_model) > 20 else gen_model)
-                                    with gen_stat_col2:
-                                        st.metric("⏱️ Gen Time", f"{round(gen_time * 1000, 2)} ms")
-                                    with gen_stat_col3:
-                                        st.metric("📝 Answer Length", f"{len(answer)} chars")
-                                    
-                                    # Display the generated answer
-                                    st.markdown("---")
-                                    st.markdown("### 💬 Generated Answer")
-                                    st.markdown(answer)
-                                    
-                                    # Debug Panel for Generation
-                                    with st.expander("🐛 Debug: Generation Details", expanded=False):
-                                        st.markdown("#### Configuration")
-                                        debug_gen_col1, debug_gen_col2 = st.columns(2)
-                                        with debug_gen_col1:
-                                            st.write(f"• **Provider:** {provider}")
-                                            st.write(f"• **Model:** {gen_model}")
-                                            st.write(f"• **Temperature:** {gen_temperature}")
-                                        with debug_gen_col2:
-                                            st.write(f"• **Max Tokens:** {gen_max_tokens}")
-                                            st.write(f"• **Prompt Template:** {prompt_template_name}")
-                                            st.write(f"• **Context Docs:** {len(retrieved_docs)}")
-                                        
-                                        st.markdown("---")
-                                        st.markdown("#### 📄 Context Used")
-                                        st.text_area(
-                                            "Combined Context",
-                                            context,
-                                            height=200,
-                                            disabled=True,
-                                            key="debug_context"
-                                        )
-                                        
-                                        st.markdown("---")
-                                        st.markdown("#### 📝 Full Prompt Sent to LLM")
-                                        st.code(formatted_prompt, language=None)
-                                        
-                                        st.markdown("---")
-                                        st.markdown("#### 📊 Token Estimates")
-                                        # Rough estimate: 1 token ≈ 4 chars
-                                        prompt_tokens_est = len(formatted_prompt) // 4
-                                        answer_tokens_est = len(answer) // 4
-                                        st.write(f"• **Prompt Tokens (est):** ~{prompt_tokens_est}")
-                                        st.write(f"• **Answer Tokens (est):** ~{answer_tokens_est}")
-                                        st.write(f"• **Total Tokens (est):** ~{prompt_tokens_est + answer_tokens_est}")
-                                        
+                                    # Format the prompt
+                                    # formatted_prompt = prompt_template.format(
+                                    #     context=context,
+                                    #     question=retrieval_query
+                                    # )
+                                    with open(st.session_state.get("test_file_path", ""), 'r', encoding='utf-8') as f:
+                                        for line_number, line in enumerate(f):
+                                            if not line.strip():
+                                                continue
+                                            
+                                            # 1. Parse the JSON line
+                                            data = json.loads(line)
+                                            retrieved_docs = data.get('contexts', [])
+                                            context_parts = []
+                                            for i, doc in enumerate(retrieved_docs):
+                                                title = doc.get('title', 'Unknown Title')
+                                                text = doc.get('text', '')
+                                                context_parts.append(f"Document [{i+1}] (Title: {title}):\n{text}")
+                                            
+                                            full_context_str = "\n\n".join(context_parts)
+                                            
+                                            # 'input' contains the conversation history
+                                            # The structure is a list of dictionaries with "speaker" and "text"
+                                            conversation_turns = data.get('input', [])
+                                            
+                                            if not conversation_turns:
+                                                continue
+
+                                            # The last item in 'input' is the current user query
+                                            last_turn = conversation_turns[-1]
+                                            current_query = last_turn['text']
+                                            print("last turn:", last_turn)
+                                            print("\ncurrent query:", current_query)
+
+                                            # Everything before the last item is history
+                                            history_turns = conversation_turns[:-1]
+                                            print("\nhistory turns:", history_turns)
+                                            # --- BUILD PROMPT ---
+                    
+                                            system_instruction = (
+                                                "You are a helpful assistant. You must answer the user's question strictly using ONLY the information provided in the 'Reference Passages' section below. Rules: 1. If the 'Reference Passages' section is empty or does not contain the answer, you must strictly output: 'I do not know'. 2. Do not use your own internal knowledge. 3. Do not make up facts."
+                                            )
+                                            print("\nfull_context_string: ", full_context_str)
+                                            # Create the message list for the LLM
+                                            # 1. System instruction with the Documents (Context)
+                                            messages = [
+                                                SystemMessage(content=f"{system_instruction}\n\n### REFERENCE PASSAGES:\n{full_context_str}")
+                                            ]
+                                            
+                                            # 2. Add Conversation History (Crucial for Multi-Turn understanding)
+                                            for turn in history_turns:
+                                                speaker = turn.get('speaker')
+                                                text = turn.get('text')
+                                                if speaker == 'user':
+                                                    messages.append(HumanMessage(content=text))
+                                                elif speaker == 'agent':
+                                                    messages.append(AIMessage(content=text))
+                                            
+                                            # 3. Add the final User Query
+                                            messages.append(HumanMessage(content=current_query))
+                                            
+                                            # --- GENERATE RESPONSE ---
+                                            
+                                            # invoke the LLM
+                                            # Note: Ensure your 'llm' object is initialized before running this
+                                            try:
+                                                ai_response = llm.invoke(messages)
+                                                prediction = ai_response.content
+
+                                                print("\nai_response: ", ai_response)
+                                            except Exception as e:
+                                                print(f"Error invoking LLM on line {line_number}: {e}")
+                                                prediction = "Error generating response."
+                                            
+                                            # Generate response
+                                            # response = llm.invoke([HumanMessage(content=formatted_prompt)])
+                                            gen_time = time.time() - gen_start
+                                            
+                                            # Extract answer
+                                            # answer = response.content if hasattr(response, 'content') else str(response)
+                                            # print("\nanswer: ", answer)
+                                            # Store generation result
+                                            run_result["generation"] = {
+                                                "model": gen_model,
+                                                "provider": provider,
+                                                "temperature": gen_temperature,
+                                                "max_tokens": gen_max_tokens,
+                                                "prompt_template_name": prompt_template_name,
+                                                "context_length": len(full_context_str),
+                                                "num_context_docs": len(retrieved_docs),
+                                                "answer": prediction,
+                                                "generation_time_ms": round(gen_time * 1000, 2)
+                                            }
+                                            
+                                            data["predictions"] = [
+                                                {
+                                                    "text": prediction
+                                                }
+                                            ]
+                                            task_b_output.append(json.dumps(data, ensure_ascii=False))
+
+                                            # # Display generation stats
+                                            # gen_stat_col1, gen_stat_col2, gen_stat_col3 = st.columns(3)
+                                            # with gen_stat_col1:
+                                            #     st.metric("🤖 Model", gen_model[:20] + "..." if len(gen_model) > 20 else gen_model)
+                                            # with gen_stat_col2:
+                                            #     st.metric("⏱️ Gen Time", f"{round(gen_time * 1000, 2)} ms")
+                                            # with gen_stat_col3:
+                                            #     st.metric("📝 Answer Length", f"{len(prediction)} chars")
+                                            
+                                            # # Display the generated answer
+                                            # st.markdown("---")
+                                            # st.markdown("### 💬 Generated Answer")
+                                            # st.markdown(prediction)
+                                            
+                                            # # Debug Panel for Generation
+                                            # with st.expander("🐛 Debug: Generation Details", expanded=False):
+                                            #     st.markdown("#### Configuration")
+                                            #     debug_gen_col1, debug_gen_col2 = st.columns(2)
+                                            #     with debug_gen_col1:
+                                            #         st.write(f"• **Provider:** {provider}")
+                                            #         st.write(f"• **Model:** {gen_model}")
+                                            #         st.write(f"• **Temperature:** {gen_temperature}")
+                                            #     with debug_gen_col2:
+                                            #         st.write(f"• **Max Tokens:** {gen_max_tokens}")
+                                            #         st.write(f"• **Prompt Template:** {prompt_template_name}")
+                                            #         st.write(f"• **Context Docs:** {len(retrieved_docs)}")
+                                                
+                                            #     st.markdown("---")
+                                            #     st.markdown("#### 📄 Context Used")
+                                            #     st.text_area(
+                                            #         "Combined Context",
+                                            #         full_context_str,
+                                            #         height=200,
+                                            #         disabled=True,
+                                            #         key="debug_context"
+                                            #     )
+                                                
+                                            #     st.markdown("---")
+                                            #     st.markdown("#### 📝 Full Prompt Sent to LLM")
+                                            #     st.code(full_context_str, language=None)
+                                                
+                                            #     st.markdown("---")
+                                            #     st.markdown("#### 📊 Token Estimates")
+                                            #     # Rough estimate: 1 token ≈ 4 chars
+                                            #     prompt_tokens_est = len(full_context_str) // 4
+                                            #     answer_tokens_est = len(prediction) // 4
+                                            #     st.write(f"• **Prompt Tokens (est):** ~{prompt_tokens_est}")
+                                            #     st.write(f"• **Answer Tokens (est):** ~{answer_tokens_est}")
+                                            #     st.write(f"• **Total Tokens (est):** ~{prompt_tokens_est + answer_tokens_est}")
+                                                
                                 except Exception as e:
                                     st.error(f"❌ Generation failed: {e}")
                                     logger.error(f"Generation error: {e}", exc_info=True)
                                     run_result["generation"] = {"error": str(e)}
-                        
+
+                        final_jsonl_content = "\n".join(task_b_output)
+                        st.download_button(
+                            label="📥 Download TASK B RESULT JSONL",
+                            data=final_jsonl_content,
+                            file_name="predictions.jsonl",
+                            mime="application/jsonl"
+                        )
                         # Calculate total time
                         total_time = time.time() - start_time
                         run_result["total_time_ms"] = round(total_time * 1000, 2)
@@ -1092,7 +1192,7 @@ Detailed Answer:""",
                     "requires": []
                 }
             },
-            "Task B - Retrieval + Generation": {
+            "Task B - Generation": {
                 "Answer Correctness": {
                     "description": "Measures correctness of generated answer against ground truth",
                     "metrics": ["Exact Match", "F1 Score", "BLEU"],
@@ -1371,7 +1471,6 @@ Detailed Answer:""",
                                     formatted_prompt = prompt_template.format(context=context, question=eval_query)
                                     
                                     llm = get_llm(provider, api_key, base_url, gen_model)
-                                    from langchain_core.messages import HumanMessage
                                     response = llm.invoke([HumanMessage(content=formatted_prompt)])
                                     answer = response.content if hasattr(response, 'content') else str(response)
                                     
