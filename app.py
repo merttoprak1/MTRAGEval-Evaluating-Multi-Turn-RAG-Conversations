@@ -1245,7 +1245,7 @@ Detailed Answer:""",
             st.subheader("🎯 Select Task to Evaluate")
             eval_task_options = {
                 "A": "Task A: Retrieval Only",
-                "B": "Task B: Retrieval + Generation",
+                "B": "Task B: Generation",
                 "C": "Task C: Full RAG Pipeline"
             }
             
@@ -1259,7 +1259,7 @@ Detailed Answer:""",
             # Map to script category
             task_to_category = {
                 "A": "Task A - Retrieval",
-                "B": "Task B - Retrieval + Generation",
+                "B": "Task B - Generation",
                 "C": "Task C - Full RAG (Rewrite + Retrieval + Generation)"
             }
             selected_category = task_to_category[eval_selected_task]
@@ -1394,7 +1394,7 @@ Detailed Answer:""",
                 ["Same as Generation", "OpenAI", "Gemini"],
                 key="eval_judge_provider"
             )
-            judge_temperature = st.slider("Judge Temperature", 0.0, 1.0, 0.0, 0.1, key="eval_judge_temp")
+            #judge_temperature = st.slider("Judge Temperature", 0.0, 1.0, 0.0, 0.1, key="eval_judge_temp")
         
         with config_col2:
             st.markdown("**Retrieval Metrics**")
