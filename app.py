@@ -7,12 +7,19 @@ import platform
 import logging
 import sys
 import json
-from src.ingestion import load_json_documents, chunk_documents
+from pathlib import Path
+from src.ingestion import load_json_documents, chunk_documents, load_beir_corpus
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
-from src.rag import create_rag_chain
+from src.rag import create_rag_chain, convert_mtrag_history_to_messages, run_rag_with_mtrag_input
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
-from src.evaluation import run_evaluation, EvaluationResult
+from src.mtrag_evaluator import (
+    validate_predictions,
+    run_retrieval_evaluation,
+    run_generation_evaluation,
+    save_predictions_jsonl,
+    format_predictions_for_mtrag
+)
 from src.database import init_db, create_session, get_sessions, save_message, load_session_history, delete_session, rename_session
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -379,14 +386,184 @@ def main():
 
     # --- Main Content ---
     
-    # Tabs: 2 new + 3 existing
-    tab_rag, tab_eval, tab_chat, tab_manage, tab_db = st.tabs([
+    # Tabs: MTRAG Benchmark + existing tabs (Evaluation Playground removed)
+    tab_rag, tab_mtrag, tab_chat, tab_manage, tab_db = st.tabs([
         "🎯 RAG Playground", 
-        "📊 Evaluation Playground",
+        "📈 MTRAG Benchmark",
         "💬 Chat", 
         "🛠️ Manage Collection", 
         "🔍 Database Inspector"
     ])
+
+    # ==================== TAB: MTRAG Benchmark ====================
+    with tab_mtrag:
+        st.header("📈 MTRAG Benchmark")
+        st.markdown("""
+        Run official MTRAG benchmark evaluation on your RAG system.
+        This uses the multi-turn conversation dataset from IBM Research.
+        """)
+        
+        # MTRAG Configuration
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            mtrag_corpus = st.selectbox(
+                "Select Corpus",
+                ["clapnq", "cloud", "fiqa", "govt"],
+                help="MTRAG corpus to evaluate on"
+            )
+            
+            mtrag_task = st.selectbox(
+                "Select Task",
+                ["generation_taskb", "retrieval_taska", "rag_taskc"],
+                format_func=lambda x: {
+                    "retrieval_taska": "Task A: Retrieval Only",
+                    "generation_taskb": "Task B: Generation (with provided contexts)",
+                    "rag_taskc": "Task C: Full RAG Pipeline"
+                }.get(x, x),
+                help="MTRAG task type"
+            )
+        
+        with col2:
+            mtrag_limit = st.number_input(
+                "Number of Tasks",
+                min_value=1,
+                max_value=100,
+                value=10,
+                help="Limit number of tasks to run (for faster testing)"
+            )
+            
+            skip_eval = st.checkbox(
+                "Skip Evaluation",
+                value=False,
+                help="Skip MTRAG evaluation after generating predictions"
+            )
+        
+        st.divider()
+        
+        # Run Benchmark Button
+        if st.button("▶️ Run MTRAG Benchmark", type="primary", key="run_mtrag_btn"):
+            if not api_key:
+                st.error("❌ Please provide API key in the sidebar")
+            else:
+                with st.spinner(f"Running MTRAG benchmark on {mtrag_corpus}..."):
+                    try:
+                        import time
+                        start_time = time.time()
+                        
+                        # Load reference tasks
+                        mtrag_root = Path(__file__).parent.parent
+                        reference_path = mtrag_root / "human" / "generation_tasks" / "reference.jsonl"
+                        
+                        if not reference_path.exists():
+                            st.error(f"Reference file not found: {reference_path}")
+                        else:
+                            # Load and filter tasks
+                            tasks = []
+                            with open(reference_path, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    task = json.loads(line.strip())
+                                    collection = task.get("Collection", "").lower()
+                                    if mtrag_corpus.lower() in collection:
+                                        tasks.append(task)
+                                        if len(tasks) >= mtrag_limit:
+                                            break
+                            
+                            st.info(f"Loaded {len(tasks)} tasks from {mtrag_corpus}")
+                            
+                            # Setup LLM
+                            llm = get_llm(provider, api_key, model_name="gemini-flash-latest")
+                            
+                            # Run generation
+                            predictions = []
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            for i, task in enumerate(tasks):
+                                task_id = task.get("task_id", "")
+                                conversation_id = task.get("conversation_id", "")
+                                input_list = task.get("input", [])
+                                contexts = task.get("contexts", [])
+                                
+                                # Get conversation history
+                                history_messages, current_question = convert_mtrag_history_to_messages(input_list)
+                                
+                                # Build context
+                                context_text = "\n\n".join([
+                                    f"[{j+1}] {ctx.get('text', '')[:500]}" 
+                                    for j, ctx in enumerate(contexts)
+                                ])
+                                
+                                # Generate answer
+                                try:
+                                    system_prompt = (
+                                        "You are an assistant for question-answering tasks. "
+                                        "Use the following retrieved context to answer the question. "
+                                        "If you don't know the answer, say 'I do not know'.\n\n"
+                                        f"Context:\n{context_text}"
+                                    )
+                                    
+                                    messages = [SystemMessage(content=system_prompt)]
+                                    messages.extend(history_messages)
+                                    messages.append(HumanMessage(content=current_question))
+                                    
+                                    response = llm.invoke(messages)
+                                    answer = response.content if hasattr(response, 'content') else str(response)
+                                except Exception as e:
+                                    answer = "I do not know."
+                                    logger.error(f"Generation error: {e}")
+                                
+                                predictions.append({
+                                    "task_id": task_id,
+                                    "conversation_id": conversation_id,
+                                    "predictions": answer
+                                })
+                                
+                                progress_bar.progress((i + 1) / len(tasks))
+                                status_text.text(f"Processing task {i+1}/{len(tasks)}")
+                            
+                            elapsed_time = time.time() - start_time
+                            
+                            # Display results
+                            st.success(f"✅ Completed {len(predictions)} tasks in {elapsed_time:.1f}s")
+                            
+                            # Show predictions table
+                            st.subheader("📋 Predictions")
+                            
+                            results_df = pd.DataFrame([
+                                {
+                                    "Task ID": p["task_id"][:20] + "...",
+                                    "Prediction": p["predictions"][:100] + "..." if len(p["predictions"]) > 100 else p["predictions"]
+                                }
+                                for p in predictions
+                            ])
+                            st.dataframe(results_df, use_container_width=True)
+                            
+                            # Export button
+                            jsonl_content = "\n".join([json.dumps(p, ensure_ascii=False) for p in predictions])
+                            st.download_button(
+                                "📥 Download Predictions (JSONL)",
+                                data=jsonl_content,
+                                file_name=f"mtrag_{mtrag_corpus}_{mtrag_task}_predictions.jsonl",
+                                mime="application/jsonl"
+                            )
+                            
+                            # Show expected vs actual for first few
+                            st.subheader("🔍 Sample Comparisons")
+                            for i, (task, pred) in enumerate(zip(tasks[:3], predictions[:3])):
+                                with st.expander(f"Task {i+1}: {task.get('input', [{}])[-1].get('text', '')[:50]}..."):
+                                    col_exp, col_act = st.columns(2)
+                                    with col_exp:
+                                        st.markdown("**Expected:**")
+                                        expected = task.get('targets', [{}])[0].get('text', 'N/A')
+                                        st.info(expected)
+                                    with col_act:
+                                        st.markdown("**Generated:**")
+                                        st.success(pred["predictions"])
+                            
+                    except Exception as e:
+                        st.error(f"❌ Benchmark failed: {e}")
+                        logger.error(f"MTRAG benchmark error: {e}", exc_info=True)
 
     # ==================== TAB 1: RAG Playground ====================
     with tab_rag:
@@ -1150,589 +1327,9 @@ def main():
                                 file_name="predictions.jsonl",
                                 mime="application/jsonl"
                             )
-    # ==================== TAB 2: Evaluation Playground ====================
-    with tab_eval:
-        st.header("📊 Evaluation Playground")
-        st.markdown("Evaluate your RAG pipeline performance with various metrics and benchmarks.")
-        
-        # # Evaluation Scripts Definition
-        # EVALUATION_SCRIPTS = {
-        #     "Task A - Retrieval": {
-        #         "Retrieval Accuracy (Hit Rate)": {
-        #             "description": "Measures if relevant documents are retrieved in top-k results",
-        #             "metrics": ["Hit Rate@K", "MRR", "NDCG"],
-        #             "requires": ["ground_truth_docs"]
-        #         },
-        #         "Retrieval Precision": {
-        #             "description": "Ratio of relevant documents among retrieved documents",
-        #             "metrics": ["Precision@K", "Recall@K", "F1@K"],
-        #             "requires": ["ground_truth_docs"]
-        #         },
-        #         "Semantic Similarity": {
-        #             "description": "Cosine similarity between query and retrieved documents",
-        #             "metrics": ["Avg Similarity", "Min Similarity", "Max Similarity"],
-        #             "requires": []
-        #         }
-        #     },
-        #     "Task B - Generation": {
-        #         "Answer Correctness": {
-        #             "description": "Measures correctness of generated answer against ground truth",
-        #             "metrics": ["Exact Match", "F1 Score", "BLEU"],
-        #             "requires": ["ground_truth_answers"]
-        #         },
-        #         "Faithfulness": {
-        #             "description": "Measures if the answer is grounded in retrieved context",
-        #             "metrics": ["Faithfulness Score", "Hallucination Rate"],
-        #             "requires": ["llm_as_judge"]
-        #         },
-        #         "Answer Relevance": {
-        #             "description": "Measures how relevant the answer is to the question",
-        #             "metrics": ["Relevance Score"],
-        #             "requires": ["llm_as_judge"]
-        #         },
-        #         "Context Relevance": {
-        #             "description": "Measures relevance of retrieved context to the question",
-        #             "metrics": ["Context Precision", "Context Recall"],
-        #             "requires": ["ground_truth_docs"]
-        #         }
-        #     },
-        #     "Task C - Full RAG (Rewrite + Retrieval + Generation)": {
-        #         "End-to-End Accuracy": {
-        #             "description": "Full pipeline accuracy from query to final answer",
-        #             "metrics": ["E2E Accuracy", "E2E F1"],
-        #             "requires": ["ground_truth_answers"]
-        #         },
-        #         "Query Rewrite Quality": {
-        #             "description": "Evaluates if rewritten query improves retrieval",
-        #             "metrics": ["Rewrite Hit Rate Improvement", "Semantic Preservation"],
-        #             "requires": ["llm_as_judge"]
-        #         },
-        #         "RAGAS Score": {
-        #             "description": "Comprehensive RAG evaluation using RAGAS framework",
-        #             "metrics": ["Faithfulness", "Answer Relevancy", "Context Precision", "Context Recall"],
-        #             "requires": ["llm_as_judge", "ground_truth_answers"]
-        #         },
-        #         "Latency Analysis": {
-        #             "description": "Performance timing for each pipeline stage",
-        #             "metrics": ["Rewrite Time", "Retrieval Time", "Generation Time", "Total Time"],
-        #             "requires": []
-        #         }
-        #     }
-        # }
-        
-        # Task Selector
-        eval_col1, eval_col2 = st.columns([1, 2])
-        
-        with eval_col1:
-            st.subheader("🎯 Select Task to Evaluate")
-            eval_task_options = {
-                "A": "Task A: Retrieval Only",
-                "B": "Task B: Generation",
-                "B": "Task B: Generation",
-                "C": "Task C: Full RAG Pipeline"
-            }
-            
-            eval_selected_task = st.radio(
-                "Task Type",
-                options=list(eval_task_options.keys()),
-                format_func=lambda x: eval_task_options[x],
-                key="eval_task_selector"
-            )
-            
-            # Map to script category
-            task_to_category = {
-                "A": "Task A - Retrieval",
-                "B": "Task B - Generation",
-                "C": "Task C - Full RAG (Rewrite + Retrieval + Generation)"
-            }
-            selected_category = task_to_category[eval_selected_task]
-        
-        # with eval_col2:
-        #     st.subheader("📋 Select Evaluation Scripts")
-            
-        #     available_scripts = EVALUATION_SCRIPTS.get(selected_category, {})
-            
-        #     selected_scripts = []
-        #     for script_name, script_info in available_scripts.items():
-        #         col_check, col_info = st.columns([1, 4])
-        #         with col_check:
-        #             if st.checkbox(script_name, key=f"eval_script_{script_name}"):
-        #                 selected_scripts.append(script_name)
-        #         with col_info:
-        #             st.caption(script_info["description"])
-        #             metrics_str = ", ".join(script_info["metrics"])
-        #             st.caption(f"📊 Metrics: {metrics_str}")
-        #             if script_info["requires"]:
-        #                 req_str = ", ".join(script_info["requires"])
-        #                 st.caption(f"⚠️ Requires: {req_str}")
-        
-        # Input Configuration
-        st.subheader("📝 Evaluation Input")
-        
-        # input_method = st.radio(
-        #     "Input Method",
-        #     ["Manual Input", "Upload Dataset", "Use Last Run"],
-        #     horizontal=True,
-        #     key="eval_input_method"
-        # )
-        
-        # eval_query = None
-        # eval_ground_truth_answer = None
-        # eval_ground_truth_docs = None
-        # use_last_run = False
-        eval_dataset = None
-        
-        # if input_method == "Manual Input":
-        #     input_col1, input_col2 = st.columns(2)
-            
-        #     with input_col1:
-        #         st.markdown("**Query**")
-        #         eval_query = st.text_area(
-        #             "Enter the query to evaluate",
-        #             placeholder="What is the capital of France?",
-        #             height=100,
-        #             key="eval_manual_query"
-        #         )
-            
-        #     with input_col2:
-        #         st.markdown("**Ground Truth (Optional)**")
-        #         eval_ground_truth_answer = st.text_area(
-        #             "Expected Answer",
-        #             placeholder="The capital of France is Paris.",
-        #             height=100,
-        #             key="eval_gt_answer",
-        #             help="The correct/expected answer for evaluation"
-        #         )
-            
-        #     # Ground truth documents (for retrieval evaluation)
-        #     with st.expander("📄 Ground Truth Documents (Optional)", expanded=False):
-        #         st.markdown("Enter document IDs or content that should be retrieved:")
-        #         eval_ground_truth_docs = st.text_area(
-        #             "Ground Truth Documents",
-        #             placeholder="doc_id_1, doc_id_2\nOR\nPaste relevant document content here...",
-        #             height=100,
-        #             key="eval_gt_docs",
-        #             help="Comma-separated doc IDs or relevant document content"
-        #         )
-        
-        # elif input_method == "Upload Dataset":
-        dataset_col1, dataset_col2 = st.columns(2)
-        
-        with dataset_col1:
-            st.markdown("**Upload Test Dataset**")
-            eval_dataset = st.file_uploader(
-                "Upload JSON/JSONL with test queries and ground truth",
-                type=["json", "jsonl"],
-                key="eval_dataset_upload",
-                help="File should contain: query, ground_truth_answer (optional), ground_truth_docs (optional)"
-            )
-            if eval_dataset is not None:
-                suffix = f".{eval_dataset.name.split('.')[-1]}"
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-                            temp_file.write(eval_dataset.getvalue())
-                            eval_dataset_path = temp_file.name
-                st.success(f"✅ Loaded: {eval_dataset.name}")
-        # Expeced formats for scripts
-        EXPECTED_FORMATS = {
-            "Task A - Retrieval": '''
-            {
-                "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                "input": [
-                    {
-                    "speaker": "user",
-                    "text": "where do the arizona cardinals play this week"
-                    }
-                ]
-                "contexts":
-                    [
-                        {
-                            "document_id": "822086267_7384-8758-0-1374",
-                            "text": "...",
-                            "score": 27.759
-                        }, ...
-                    ],
-                }''',
-            "Task B - Generation": '''
-            {
-                "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                "input": [
-                    {
-                    "speaker": "user",
-                    "text": "where do the arizona cardinals play this week"
-                    }
-                ]
-                "contexts":
-                    [
-                        {
-                            "document_id": "822086267_7384-8758-0-1374",
-                            "text": "...",
-                            "score": 27.759
-                        }, ...
-                    ],
-                    "predictions":
-                    [
-                        {
-                            "text": "..."
-                        }
-                    ]
-                }''',
-            "Task C - Full RAG (Rewrite + Retrieval + Generation)": '''
-                {
-                    "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                    "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                    "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                    "input": [
-                        {
-                        "speaker": "user",
-                        "text": "where do the arizona cardinals play this week"
-                        }
-                    ]
-                    "contexts":
-                        [
-                            {
-                                "document_id": "822086267_7384-8758-0-1374",
-                                "text": "...",
-                                "score": 27.759
-                            }, ...
-                        ],
-                        "predictions":
-                        [
-                            {
-                                "text": "..."
-                            }
-                        ]
-                    }'''
-        }
+    # (Evaluation Playground tab removed - using MTRAG Benchmark instead)
 
-        with dataset_col2:
-            st.markdown("**Expected Format:**")
-            st.code(EXPECTED_FORMATS.get(selected_category, ""), language="json")
-        
-        # else:  # Use Last Run
-        #     if st.session_state.run_result:
-        #         use_last_run = True
-        #         run = st.session_state.run_result
-        #         st.success(f"✅ Using last run: Task {run.get('task', 'N/A')}")
-                
-        #         result_col1, result_col2 = st.columns(2)
-        #         with result_col1:
-        #             st.markdown("**Query from last run:**")
-        #             st.info(run.get('query', 'N/A'))
-        #             eval_query = run.get('query')
-                
-        #         with result_col2:
-        #             st.markdown("**Provide Ground Truth (Optional):**")
-        #             eval_ground_truth_answer = st.text_area(
-        #                 "Expected Answer for this query",
-        #                 placeholder="Enter the correct answer to compare against...",
-        #                 height=100,
-        #                 key="eval_last_run_gt"
-        #             )
-        #     else:
-        #         st.warning("⚠️ No pipeline run available. Run a query in RAG Playground first.")
-        
-        st.divider()
-        
-        # Evaluation Configuration
-        st.subheader("⚙️ Evaluation Configuration")
-        
-        config_col1, config_col2 = st.columns(2)
-        judge_provider = "ibm-granite/granite-3.3-8b-instruct"
-        
-        if eval_selected_task in ["B", "C"]:
-            with config_col1:
-                st.markdown("**LLM-as-Judge Settings**")
-                judge_provider = st.selectbox(
-                    "ibm-granite/granite-3.3-8b-instruct",
-                    ["Same as Generation", "Custom"],
-                    key="eval_judge_provider"
-                )
-                if judge_provider == "Custom":
-                    judge_provider = st.text_input("Custom Judge LLM Provider", placeholder=
-                        "eg. ibm-granite/granite-3.3-8b-instruct",
-                        value="ibm-granite/granite-3.3-8b-instruct",
-                        key="custom_judge_llm_provider"
-                    )
-                
-        
-        with config_col2:
-            st.markdown("**Output Options**")
-            show_detailed = st.checkbox("Show detailed results", value=True, key="eval_detailed")
-            export_results = st.checkbox("Export results to JSON", value=True, key="eval_export")
-        
-        st.divider()
-        
-        # Run Evaluation Button
-        # eval_ready = len(selected_scripts) > 0 and (eval_dataset or use_last_run or eval_query)
-        eval_ready = eval_dataset
-
-        if st.button("🚀 Run Evaluation", type="primary", disabled=not eval_ready):
-            if not eval_ready:
-                st.warning("Please upload a file to evaluate.")
-            else:
-                with st.spinner("Running evaluation..."):
-                    import time
-                    eval_start = time.time()
-                    
-                    # Determine what data to use
-                    run_data = None
-                    if platform.system() == "Windows":
-                        venv_python = os.path.abspath("src/evaluation/venv/Scripts/python.exe")
-                    else:
-                        # Linux and macOS
-                        venv_python = os.path.abspath("src/evaluation/venv/bin/python")
-                    
-                    output_path = eval_dataset_path.replace(suffix, "_results.json")
-                
-                    run_retrieval_eval_command = [
-                        venv_python, "src/evaluation/run_retrieval_eval.py",
-                        "--input_file", eval_dataset_path,
-                        "--output_file", output_path,
-                    ]
-                    
-                    run_gen_eval_command = [
-                        venv_python, "src/evaluation/run_generation_eval.py",
-                        "-i", eval_dataset_path,
-                        "-o", output_path,
-                        "-e", "src/evaluation/config.yaml",
-                        "--provider", "hf",
-                        "--judge_model", judge_provider
-                    ]
-                    selected_script = run_retrieval_eval_command if eval_selected_task == "A" else run_gen_eval_command
-                    with st.status("Evaluating...", expanded=True) as status:
-                        result = subprocess.run(selected_script, capture_output=True, text=True)
-                        
-                        if result.returncode == 0:
-                            status.update(label="✅ Evaluation Complete!", state="complete")
-                            time.sleep(10)
-                            # 3. Provide the download button
-                            if os.path.exists(output_path):
-                                with open(output_path, "rb") as f:
-                                    st.download_button(
-                                        label="📥 Download Evaluation Results",
-                                        data=f,
-                                        file_name="evaluation_results.json",
-                                        mime="application/json"
-                                    )
-                            else:
-                                st.error("Script finished but no output file was found.")
-                        else:
-                            status.update(label="❌ Evaluation Failed", state="error")
-                            st.error(result.stderr)
-                    # if use_last_run and st.session_state.run_result:
-                    #     # Use existing run result
-                    #     run_data = st.session_state.run_result
-                    #     st.info(f"📋 Using last run result (Task {run_data.get('task', 'N/A')})")
-                    
-                    # elif eval_query:
-                    #     # Need to run the pipeline first
-                    #     st.info(f"🔄 Running pipeline for: {eval_query[:50]}...")
-                        
-                    #     if st.session_state.vector_store is None:
-                    #         st.error("❌ No vector store loaded. Please upload documents first.")
-                    #     else:
-                    #         # Run retrieval
-                    #         try:
-                    #             retriever_config = st.session_state.selected_components.get("retriever", {})
-                    #             top_k = retriever_config.get("top_k", eval_top_k)
-                                
-                    #             docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
-                    #                 eval_query, k=top_k
-                    #             )
-                                
-                    #             retrieval_results = []
-                    #             for doc, score in docs_with_scores:
-                    #                 retrieval_results.append({
-                    #                     "content": doc.page_content[:500],
-                    #                     "score": float(score),
-                    #                     "metadata": doc.metadata
-                    #                 })
-                                
-                    #             run_data = {
-                    #                 "task": eval_selected_task,
-                    #                 "query": eval_query,
-                    #                 "retrieved_docs": [doc for doc, _ in docs_with_scores],
-                    #                 "retrieval": {
-                    #                     "results": retrieval_results,
-                    #                     "num_results": len(docs_with_scores)
-                    #                 }
-                    #             }
-                                
-                    #             # Run generation if Task B or C
-                    #             if eval_selected_task in ["B", "C"]:
-                    #                 gen_config = st.session_state.selected_components.get("generator", {})
-                    #                 gen_model = gen_config.get("model", model_name)
-                                    
-                    #                 context = "\n\n".join([doc.page_content for doc, _ in docs_with_scores])
-                    #                 prompt_template = gen_config.get("prompt_template", "Answer based on context: {context}\n\nQuestion: {question}")
-                    #                 formatted_prompt = prompt_template.format(context=context, question=eval_query)
-                                    
-                    #                 llm = get_llm(provider, api_key, base_url, gen_model)
-                    #                 response = llm.invoke([HumanMessage(content=formatted_prompt)])
-                    #                 answer = response.content if hasattr(response, 'content') else str(response)
-                                    
-                    #                 run_data["generation"] = {"answer": answer, "model": gen_model}
-                                
-                    #         except Exception as e:
-                    #             st.error(f"❌ Pipeline execution failed: {e}")
-                    #             run_data = None
-                    
-                    # if run_data:
-                    #     # Run selected evaluation scripts
-                    #     st.subheader("📊 Evaluation Results")
-                        
-                    #     # Get LLM for judge if needed
-                    #     judge_llm = None
-                    #     if judge_provider != "Same as Generation":
-                    #         try:
-                    #             judge_llm = get_llm(judge_provider, api_key, base_url, model_name)
-                    #         except:
-                    #             pass
-                    #     else:
-                    #         try:
-                    #             judge_llm = get_llm(provider, api_key, base_url, model_name)
-                    #         except:
-                    #             pass
-                        
-                    #     # Parse ground truth docs
-                    #     gt_docs = None
-                    #     if eval_ground_truth_docs:
-                    #         gt_docs = [d.strip() for d in eval_ground_truth_docs.split(",") if d.strip()]
-                        
-                    #     # Run each evaluation script
-                    #     all_results = []
-                    #     for script_name in selected_scripts:
-                    #         result = run_evaluation(
-                    #             script_name=script_name,
-                    #             run_result=run_data,
-                    #             ground_truth_answer=eval_ground_truth_answer,
-                    #             ground_truth_docs=gt_docs,
-                    #             llm=judge_llm
-                    #         )
-                    #         all_results.append(result)
-                        
-                    #     eval_time = time.time() - eval_start
-                        
-                    #     # Calculate overall metrics
-                    #     overall_score = sum(r.overall_score for r in all_results) / len(all_results) if all_results else 0
-                    #     passed_count = sum(1 for r in all_results if r.passed)
-                        
-                    #     # Display summary metrics
-                    #     summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
-                    #     with summary_col1:
-                    #         st.metric("📊 Overall Score", f"{overall_score:.2%}")
-                    #     with summary_col2:
-                    #         st.metric("✅ Passed", f"{passed_count}/{len(all_results)}")
-                    #     with summary_col3:
-                    #         st.metric("📋 Scripts Run", len(all_results))
-                    #     with summary_col4:
-                    #         st.metric("⏱️ Eval Time", f"{eval_time:.2f}s")
-                        
-                    #     st.markdown("---")
-                        
-                    #     # Display individual results
-                    #     st.markdown("### 📋 Script Results")
-                        
-                    #     for result in all_results:
-                    #         status_icon = "✅" if result.passed else "❌"
-                    #         score_color = "green" if result.passed else "red"
-                            
-                    #         with st.expander(f"{status_icon} {result.script_name} - Score: {result.overall_score:.2%}", expanded=True):
-                    #             # Score and status row
-                    #             score_col1, score_col2 = st.columns([2, 3])
-                                
-                    #             with score_col1:
-                    #                 st.markdown(f"**Score:** `{result.overall_score:.4f}`")
-                    #                 st.progress(result.overall_score)
-                    #                 st.markdown(f"**Status:** {status_icon} {'Passed' if result.passed else 'Failed'}")
-                                
-                    #             with score_col2:
-                    #                 st.markdown("**Explanation:**")
-                    #                 st.info(result.explanation)
-                                
-                    #             # Metrics breakdown
-                    #             if result.metrics:
-                    #                 st.markdown("**Metrics:**")
-                    #                 metric_cols = st.columns(len(result.metrics))
-                    #                 for i, (metric_name, metric_value) in enumerate(result.metrics.items()):
-                    #                     with metric_cols[i % len(metric_cols)]:
-                    #                         if isinstance(metric_value, float):
-                    #                             st.metric(metric_name, f"{metric_value:.4f}")
-                    #                         else:
-                    #                             st.metric(metric_name, str(metric_value))
-                                
-                    #             # Raw details (optional)
-                    #             if show_detailed and result.details:
-                    #                 with st.expander("🔍 Raw Evaluation Details"):
-                    #                     st.json(result.details)
-                        
-                        # Export option
-                        # if export_results:
-                        #     export_data = {
-                        #         "overall_score": overall_score,
-                        #         "evaluation_time_s": eval_time,
-                        #         "results": [
-                        #             {
-                        #                 "script": r.script_name,
-                        #                 "score": r.overall_score,
-                        #                 "passed": r.passed,
-                        #                 "metrics": r.metrics,
-                        #                 "explanation": r.explanation
-                        #             }
-                        #             for r in all_results
-                        #         ]
-                        #     }
-                        #     st.download_button(
-                        #         "📥 Download Results JSON",
-                        #         data=json.dumps(export_data, indent=2),
-                        #         file_name="evaluation_results.json",
-                        #         mime="application/json"
-                        #     )
-                        
-                        # # Raw evaluation logs
-                        # with st.expander("🐛 Raw Evaluation Logs", expanded=False):
-                        #     st.markdown("### Evaluation Configuration")
-                        #     st.write(f"• **Task:** {eval_selected_task}")
-                        #     st.write(f"• **Scripts:** {', '.join(selected_scripts)}")
-                        #     st.write(f"• **Judge Provider:** {judge_provider}")
-                        #     st.write(f"• **Ground Truth Provided:** {'Yes' if eval_ground_truth_answer else 'No'}")
-                            
-                        #     st.markdown("### Run Data Used")
-                        #     st.json({
-                        #         "query": run_data.get("query"),
-                        #         "task": run_data.get("task"),
-                        #         "has_retrieval": "retrieval" in run_data,
-                        #         "has_generation": "generation" in run_data,
-                        #         "retrieval_count": run_data.get("retrieval", {}).get("num_results", 0)
-                        #     })
-                            
-                        #     st.markdown("### All Results (Raw)")
-                        #     for r in all_results:
-                        #         st.markdown(f"**{r.script_name}**")
-                        #         st.json({
-                        #             "overall_score": r.overall_score,
-                        #             "metrics": r.metrics,
-                        #             "passed": r.passed,
-                        #             "explanation": r.explanation,
-                        #             "details": r.details
-                        #         })
-        
-        # Show current run result summary
-        # if st.session_state.run_result and use_last_run:
-        #     with st.expander("📋 Current Run Result (for evaluation)", expanded=False):
-        #         run = st.session_state.run_result
-        #         st.write(f"**Task:** {run.get('task')}")
-        #         st.write(f"**Query:** {run.get('query')}")
-        #         st.write(f"**Has Retrieval:** {'✅' if 'retrieval' in run else '❌'}")
-        #         st.write(f"**Has Generation:** {'✅' if 'generation' in run else '❌'}")
-        #         if 'generation' in run:
-        #             st.write(f"**Answer Preview:** {run['generation'].get('answer', '')[:200]}...")
-
-    # ==================== TAB 3: Chat (existing) ====================
+        # ==================== TAB 3: Chat (existing) ====================
     with tab_chat:
         st.header("Chat")
         
