@@ -442,128 +442,113 @@ def main():
         st.divider()
         
         # Run Benchmark Button
+        # Run Benchmark Button
         if st.button("▶️ Run MTRAG Benchmark", type="primary", key="run_mtrag_btn"):
-            if not api_key:
-                st.error("❌ Please provide API key in the sidebar")
+            if provider != "Local" and not api_key:
+                st.error("❌ Please provide API key in the sidebar for non-local providers")
             else:
-                with st.spinner(f"Running MTRAG benchmark on {mtrag_corpus}..."):
-                    try:
-                        import time
-                        start_time = time.time()
+                try:
+                    import subprocess
+                    import sys
+                    
+                    # Prepare command
+                    cmd = [
+                        sys.executable, "run_mtrag_benchmark.py",
+                        "--corpus", mtrag_corpus,
+                        "--task", mtrag_task,
+                        "--limit", str(mtrag_limit),
+                        "--provider", provider,
+                        "--model", model_name
+                    ]
+                    
+                    if provider == "Local":
+                        if base_url:
+                            cmd.extend(["--base_url", base_url])
+                    else:
+                        cmd.extend(["--api_key", api_key])
                         
-                        # Load reference tasks
-                        mtrag_root = Path(__file__).parent.parent
-                        reference_path = mtrag_root / "human" / "generation_tasks" / "reference.jsonl"
+                    if skip_eval:
+                        cmd.append("--skip_eval")
                         
-                        if not reference_path.exists():
-                            st.error(f"Reference file not found: {reference_path}")
+                    # Output file path (must match what run_mtrag_benchmark.py uses)
+                    # It creates files like: results/{task}/{corpus}_predictions.jsonl
+                    # We can use the --output arg to be sure
+                    output_file = Path("results") / mtrag_task / f"{mtrag_corpus}_predictions.jsonl"
+                    cmd.extend(["--output", str(output_file)])
+                    
+                    st.info(f"Executing: {' '.join(cmd)}")
+                    
+                    with st.spinner(f"Running MTRAG benchmark on {mtrag_corpus}..."):
+                        # Run command
+                        process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            encoding='utf-8',
+                            errors='replace' # Handle encoding errors gracefully
+                        )
+                        
+                        # Real-time output container
+                        output_container = st.empty()
+                        logs = []
+                        
+                        # Read logs in real-time
+                        while True:
+                            output = process.stdout.readline()
+                            if output == '' and process.poll() is not None:
+                                break
+                            if output:
+                                line = output.strip()
+                                logs.append(line)
+                                # Show last few lines of log
+                                output_container.code("\n".join(logs[-10:]), language="bash")
+                        
+                        # Check exit code
+                        return_code = process.poll()
+                        if return_code != 0:
+                            stderr = process.stderr.read()
+                            st.error(f"Benchmark failed with code {return_code}")
+                            st.error(stderr)
                         else:
-                            # Load and filter tasks
-                            tasks = []
-                            with open(reference_path, 'r', encoding='utf-8') as f:
-                                for line in f:
-                                    task = json.loads(line.strip())
-                                    collection = task.get("Collection", "").lower()
-                                    if mtrag_corpus.lower() in collection:
-                                        tasks.append(task)
-                                        if len(tasks) >= mtrag_limit:
-                                            break
+                            st.success("✅ Benchmark completed successfully!")
                             
-                            st.info(f"Loaded {len(tasks)} tasks from {mtrag_corpus}")
-                            
-                            # Setup LLM
-                            llm = get_llm(provider, api_key, model_name="gemini-flash-latest")
-                            
-                            # Run generation
-                            predictions = []
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            
-                            for i, task in enumerate(tasks):
-                                task_id = task.get("task_id", "")
-                                conversation_id = task.get("conversation_id", "")
-                                input_list = task.get("input", [])
-                                contexts = task.get("contexts", [])
+                            # Load and display results
+                            if output_file.exists():
+                                st.subheader("📋 Predictions")
+                                predictions = []
+                                with open(output_file, 'r', encoding='utf-8') as f:
+                                    for line in f:
+                                        predictions.append(json.loads(line))
                                 
-                                # Get conversation history
-                                history_messages, current_question = convert_mtrag_history_to_messages(input_list)
-                                
-                                # Build context
-                                context_text = "\n\n".join([
-                                    f"[{j+1}] {ctx.get('text', '')[:500]}" 
-                                    for j, ctx in enumerate(contexts)
+                                # Display table
+                                results_df = pd.DataFrame([
+                                    {
+                                        "Task ID": p.get("task_id", "")[:20] + "...",
+                                        "Conversation ID": p.get("conversation_id", ""),
+                                        "Prediction": str(p.get("predictions", ""))[:100] + "...",
+                                        "Contexts": len(p.get("contexts", []))
+                                    }
+                                    for p in predictions
                                 ])
+                                st.dataframe(results_df, use_container_width=True)
                                 
-                                # Generate answer
-                                try:
-                                    system_prompt = (
-                                        "You are an assistant for question-answering tasks. "
-                                        "Use the following retrieved context to answer the question. "
-                                        "If you don't know the answer, say 'I do not know'.\n\n"
-                                        f"Context:\n{context_text}"
-                                    )
-                                    
-                                    messages = [SystemMessage(content=system_prompt)]
-                                    messages.extend(history_messages)
-                                    messages.append(HumanMessage(content=current_question))
-                                    
-                                    response = llm.invoke(messages)
-                                    answer = response.content if hasattr(response, 'content') else str(response)
-                                except Exception as e:
-                                    answer = "I do not know."
-                                    logger.error(f"Generation error: {e}")
+                                # Download button
+                                with open(output_file, "r", encoding='utf-8') as f:
+                                    jsonl_content = f.read()
                                 
-                                predictions.append({
-                                    "task_id": task_id,
-                                    "conversation_id": conversation_id,
-                                    "predictions": answer
-                                })
+                                st.download_button(
+                                    "📥 Download Predictions (JSONL)",
+                                    data=jsonl_content,
+                                    file_name=output_file.name,
+                                    mime="application/jsonl"
+                                )
+                            else:
+                                st.warning(f"Output file not found at {output_file}")
                                 
-                                progress_bar.progress((i + 1) / len(tasks))
-                                status_text.text(f"Processing task {i+1}/{len(tasks)}")
-                            
-                            elapsed_time = time.time() - start_time
-                            
-                            # Display results
-                            st.success(f"✅ Completed {len(predictions)} tasks in {elapsed_time:.1f}s")
-                            
-                            # Show predictions table
-                            st.subheader("📋 Predictions")
-                            
-                            results_df = pd.DataFrame([
-                                {
-                                    "Task ID": p["task_id"][:20] + "...",
-                                    "Prediction": p["predictions"][:100] + "..." if len(p["predictions"]) > 100 else p["predictions"]
-                                }
-                                for p in predictions
-                            ])
-                            st.dataframe(results_df, use_container_width=True)
-                            
-                            # Export button
-                            jsonl_content = "\n".join([json.dumps(p, ensure_ascii=False) for p in predictions])
-                            st.download_button(
-                                "📥 Download Predictions (JSONL)",
-                                data=jsonl_content,
-                                file_name=f"mtrag_{mtrag_corpus}_{mtrag_task}_predictions.jsonl",
-                                mime="application/jsonl"
-                            )
-                            
-                            # Show expected vs actual for first few
-                            st.subheader("🔍 Sample Comparisons")
-                            for i, (task, pred) in enumerate(zip(tasks[:3], predictions[:3])):
-                                with st.expander(f"Task {i+1}: {task.get('input', [{}])[-1].get('text', '')[:50]}..."):
-                                    col_exp, col_act = st.columns(2)
-                                    with col_exp:
-                                        st.markdown("**Expected:**")
-                                        expected = task.get('targets', [{}])[0].get('text', 'N/A')
-                                        st.info(expected)
-                                    with col_act:
-                                        st.markdown("**Generated:**")
-                                        st.success(pred["predictions"])
-                            
-                    except Exception as e:
-                        st.error(f"❌ Benchmark failed: {e}")
-                        logger.error(f"MTRAG benchmark error: {e}", exc_info=True)
+                except Exception as e:
+                    st.error(f"❌ Execution error: {e}")
+                    logger.error(f"Benchmark execution error: {e}", exc_info=True)
 
     # ==================== TAB 1: RAG Playground ====================
     with tab_rag:
