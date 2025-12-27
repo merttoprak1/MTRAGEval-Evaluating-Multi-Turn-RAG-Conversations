@@ -1,310 +1,163 @@
-# Modular RAG Chatbot
+# MTRAGEval - Multi-Turn RAG Evaluation System
 
-A modular Retrieval-Augmented Generation (RAG) chatbot built with Streamlit, LangChain, and FAISS. This application supports multiple LLM providers, including Google Gemini, OpenAI, and local models via LM Studio and Ollama.
+A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRAG Benchmark** for evaluating multi-turn conversational AI. Built with Streamlit, LangChain, and FAISS.
 
 ## Features
 
-- **Multi-Provider Support**: Switch between Google Gemini, OpenAI, and local LLMs (Ollama/LM Studio).
-- **RAG Capabilities**: Upload JSON/JSONL documents to chat with your data.
-- **Efficient Vector Store**: Uses FAISS (local file-based) for fast document retrieval and compatibility.
-- **Session Management**: Create, rename, and delete chat sessions.
-- **Database Inspector**: Built-in tools to inspect chat history and sessions.
+- **MTRAG Benchmark Integration**: Official multi-turn RAG evaluation from IBM Research
+- **Multi-Provider LLM Support**: Google Gemini, OpenAI, and local models (Ollama/LM Studio)
+- **BEIR Format Support**: Standard benchmark data format for retrieval tasks
+- **Multi-Turn History**: Proper conversation context handling for chat-based evaluation
+- **Vector Store Options**: FAISS, Chroma, and Pinecone support
+- **Session Management**: Create, rename, and delete chat sessions
 
-## Prerequisites
+## Quick Start
 
-- Python 3.8 or higher
-- [Ollama](https://ollama.com/) (optional, for local embeddings/inference)
-- [LM Studio](https://lmstudio.ai/) (optional, for local inference)
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-## Installation
+# Create .env file with your API key
+echo "GOOGLE_API_KEY=your_key_here" > .env
 
-1.  **Clone the repository:**
+# Run Streamlit UI
+streamlit run app.py
 
-    ```bash
-    git clone <repository-url>
-    cd <repository-directory>
-    ```
+# Or run CLI benchmark
+python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
+```
 
-2.  **Create and activate a virtual environment (recommended):**
+## MTRAG Benchmark
 
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+### What is MTRAG?
 
-3.  **Install dependencies:**
+MTRAG (Multi-Turn RAG) is a comprehensive benchmark dataset from IBM Research for evaluating RAG systems on multi-turn conversations. It includes:
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+- **4 Corpora**: ClapNQ, Cloud, FiQA, Govt
+- **842 Evaluation Tasks**: Human-generated multi-turn conversations
+- **3 Task Types**: Retrieval (A), Generation (B), Full RAG (C)
 
-## Usage
+### Running Benchmarks
 
-1.  **Run the application:**
+#### CLI Mode
 
-    ```bash
-    streamlit run app.py
-    ```
+```bash
+# Task A: Retrieval Only
+python run_mtrag_benchmark.py --corpus clapnq --task retrieval_taska --top_k 5
 
-2.  **Open your browser:**
-    The application will typically run at `http://localhost:8501`.
+# Task B: Generation (with provided contexts)
+python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
+
+# Task C: Full RAG Pipeline
+python run_mtrag_benchmark.py --corpus clapnq --task rag_taskc --provider Gemini
+```
+
+#### UI Mode
+
+1. Open `http://localhost:8501`
+2. Enter API key in sidebar
+3. Go to **📈 MTRAG Benchmark** tab
+4. Select corpus and task type
+5. Click **Run MTRAG Benchmark**
+
+### Evaluation Metrics
+
+| Task | Metrics |
+|------|---------|
+| **Task A** | Recall@K, nDCG@K |
+| **Task B/C** | Faithfulness, Appropriateness, Completeness, IDK Accuracy |
+
+## Project Structure
+
+```
+├── app.py                     # Streamlit UI
+├── run_mtrag_benchmark.py     # CLI benchmark runner
+├── src/
+│   ├── ingestion.py           # BEIR + JSON document loading
+│   ├── rag.py                 # RAG chains + multi-turn history
+│   ├── mtrag_evaluator.py     # MTRAG evaluation bridge
+│   ├── llm_client.py          # LLM provider factory
+│   ├── vector_store.py        # Vector DB setup
+│   ├── query_rewrite.py       # Query rewriting
+│   └── evaluation/            # MTRAG official scripts
+├── .env.example               # API key template
+└── requirements.txt
+```
 
 ## Configuration
 
 ### Google Gemini (Recommended)
 
-1.  Select **Gemini** as the LLM Provider in the sidebar.
-2.  Enter your **Google API Key**.
-3.  (Optional) Specify a model name (default: `gemini-flash-latest`).
-4.  For Embeddings, select **Gemini** in the Embedding Configuration section (reuses API Key).
+1. Get API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Create `.env` file: `GOOGLE_API_KEY=your_key`
+3. Select **Gemini** as provider in sidebar
 
-### OpenAI
+### Local Models (Ollama)
 
-1.  Select **OpenAI** as the LLM Provider in the sidebar.
-2.  Enter your **OpenAI API Key**.
-3.  (Optional) Specify a model name (default: `gpt-3.5-turbo`).
+```bash
+# Pull a model
+ollama pull llama3
 
-### Local LLMs
-
-You can run this chatbot with local models using either LM Studio or Ollama.
-
-#### LM Studio
-
-1.  **Download and Install**: Get [LM Studio](https://lmstudio.ai/).
-2.  **Load a Model**: Download and load a model (e.g., Llama 3, Mistral).
-3.  **Start Server**:
-    - Go to the "Local Server" tab (double-headed arrow icon).
-    - Ensure the server port is `1234` (default).
-    - Click **Start Server**.
-4.  **Configure Chatbot**:
-    - In the chatbot sidebar, select **Local** as the LLM Provider.
-    - Set **Local LLM Base URL** to `http://localhost:1234/v1`.
-    - Set **Model Name** to the model you loaded (e.g., `QuantFactory/Meta-Llama-3-8B-Instruct-GGUF`).
-
-#### Ollama
-
-1.  **Download and Install**: Get [Ollama](https://ollama.com/).
-2.  **Pull a Model**: Run `ollama pull llama3` (or your preferred model) in your terminal.
-3.  **Start Ollama**: Ensure Ollama is running (usually runs in the background).
-4.  **Configure Chatbot**:
-    - **For Chat**:
-        - Select **Local** as the LLM Provider.
-        - Set **Local LLM Base URL** to `http://localhost:11434/v1`.
-        - Set **Model Name** to your pulled model (e.g., `llama3`).
-    - **For Embeddings**:
-        - Select **Local (Ollama)** as the Embedding Provider.
-        - Set **Embedding Base URL** to `http://localhost:11434`.
-        - Set **Embedding Model** to a text embedding model (e.g., `nomic-embed-text` or `mxbai-embed-large`). *Note: You may need to pull these models first via `ollama pull nomic-embed-text`.*
-
-## Data Ingestion
-
-1.  Upload a `.json` or `.jsonl` file in the sidebar.
-2.  Click **Process File** to ingest documents into the FAISS vector store.
-    - *Note: If using Gemini Embeddings, processing is rate-limited (10 docs / 5s) to respect free tier quotas.*
-3.  Start chatting!
-
----
-
-## RAG Playground
-
-The RAG Playground is a comprehensive testing and evaluation environment for RAG pipelines. It provides three task types for different evaluation scenarios.
-
-### Tasks Overview
-
-| Task | Pipeline | Use Case |
-|------|----------|----------|
-| **Task A** | Query → Retrieval | Test retrieval quality |
-| **Task B** | Query → Retrieval → Generation | Test end-to-end RAG |
-| **Task C** | Query → Rewrite → Retrieval → Generation | Test full pipeline with query optimization |
-
-### Quick Start
-
-1. **Configure Components** (Sidebar):
-   - Select LLM Provider (OpenAI/Gemini/Local) and enter API key
-   - Select Embedding Provider and model
-   - Choose Vector Database (FAISS/Chroma/Pinecone)
-   - Set Top-K retrieval count
-
-2. **Upload Documents**:
-   - Upload JSON/JSONL file in sidebar
-   - Click "Process File" to ingest into vector store
-
-3. **Run Pipeline** (RAG Playground tab):
-   - Select Task (A, B, or C)
-   - Configure task-specific options
-   - Enter test query
-   - Click "▶️ Run Pipeline"
-
-4. **View Results**:
-   - Retrieval results with scores and metadata
-   - Generated answer (Task B, C)
-   - Debug panel with full run details
-
-### Task A: Retrieval Only
-
-**Purpose**: Evaluate retrieval quality in isolation.
-
-**Flow**:
-```
-Query → Embedding → Vector Search → Retrieved Documents
+# Configure in app
+# Provider: Local
+# Base URL: http://localhost:11434/v1
+# Model: llama3
 ```
 
-**Configuration**:
-- Retrieval Top-K
-- Search Type (similarity)
+## UI Tabs
 
-**Output**:
-- Retrieved chunks with similarity scores
-- Source metadata (ID, source, title)
-- Retrieval time
+| Tab | Purpose |
+|-----|---------|
+| 🎯 RAG Playground | Manual RAG testing (Task A/B/C) |
+| 📈 MTRAG Benchmark | Official benchmark evaluation |
+| 💬 Chat | Interactive conversation |
+| 🛠️ Manage Collection | Vector DB document management |
+| 🔍 Database Inspector | View chat history database |
 
-### Task B: Retrieval + Generation
+## Key Components
 
-**Purpose**: Test end-to-end RAG with answer generation.
+### Multi-Turn History Support
 
-**Flow**:
-```
-Query → Embedding → Vector Search → Context Building → LLM Generation → Answer
-```
+The system properly handles MTRAG's multi-turn conversation format:
 
-**Configuration**:
-- All Task A settings
-- LLM Model selection
-- Prompt template (Default RAG, Concise, Detailed, Custom)
-- Temperature & Max Tokens
+```python
+from src.rag import convert_mtrag_history_to_messages
 
-**Output**:
-- Retrieved chunks with scores
-- Generated answer
-- Debug: Full prompt sent to LLM
-
-### Task C: Full RAG Pipeline
-
-**Purpose**: Complete RAG with query rewriting for improved retrieval.
-
-**Flow**:
-```
-Query → Query Rewrite → Embedding → Vector Search → Context Building → LLM Generation → Answer
+# MTRAG format → LangChain messages
+history, current_question = convert_mtrag_history_to_messages(input_list)
 ```
 
-**Configuration**:
-- All Task B settings
-- Rewrite method (LLM-based, Rule-based, Hybrid)
-- Custom rewrite prompt (optional)
+### BEIR Format Loading
 
-**Output**:
-- Original vs Rewritten query
-- Retrieved chunks with scores
-- Generated answer
-- Pipeline summary with all stages
+```python
+from src.ingestion import load_beir_corpus, load_beir_queries, load_beir_qrels
 
----
-
-## Evaluation Playground
-
-The Evaluation Playground allows you to evaluate your RAG pipeline performance with various metrics.
-
-### Available Evaluation Scripts
-
-#### Task A - Retrieval Metrics
-| Script | Metrics | Description |
-|--------|---------|-------------|
-| Retrieval Accuracy | Hit Rate, MRR | Measures if relevant docs are retrieved |
-| Retrieval Precision | Precision@K, Recall@K | Ratio of relevant docs in results |
-| Semantic Similarity | Avg/Min/Max Similarity | Query-document similarity |
-
-#### Task B - Generation Metrics
-| Script | Metrics | Description |
-|--------|---------|-------------|
-| Answer Correctness | Exact Match, F1, BLEU | Compares to ground truth |
-| Faithfulness | Faithfulness Score | Grounding in context |
-| Answer Relevance | Relevance Score | Answer relevance to question |
-| Context Relevance | Context Precision/Recall | Retrieved context quality |
-
-#### Task C - Full Pipeline Metrics
-| Script | Metrics | Description |
-|--------|---------|-------------|
-| End-to-End Accuracy | E2E Accuracy, E2E F1 | Full pipeline accuracy |
-| Query Rewrite Quality | Hit Rate Improvement | Rewrite effectiveness |
-| RAGAS Score | Composite Score | Comprehensive RAG evaluation |
-| Latency Analysis | Stage timings | Performance analysis |
-
-### Running Evaluations
-
-1. **Select Task** to evaluate
-2. **Select Evaluation Scripts** (one or more)
-3. **Provide Input**:
-   - Manual: Enter query + ground truth (optional)
-   - Upload: JSON dataset with queries and ground truth
-   - Last Run: Use previous pipeline results
-4. **Configure**:
-   - LLM-as-Judge settings
-   - Similarity thresholds
-   - Export options
-5. **Click "🚀 Run Evaluation"**
-
-### Results Display
-
-- **Overall Score**: Aggregate of all scripts
-- **Pass/Fail Status**: Per script
-- **Metrics Breakdown**: Individual metric values
-- **Explanation**: Human-readable result description
-- **Export**: Download results as JSON
-
----
-
-## Export & Debug Features
-
-### Export Options
-- **📥 Export Results**: Full run results as JSON
-- **📝 Export Answer**: Generated answer as text
-- **⚙️ Export Config**: Configuration snapshot as JSON
-
-### Debug Panel
-Each pipeline run includes a debug panel with:
-- **Config Tab**: Full configuration snapshot
-- **Rewrite Tab**: Query rewrite details (Task C)
-- **Retrieval Tab**: Retrieval statistics
-- **Generation Tab**: Generation details
-- **Raw JSON Tab**: Complete run result
-
----
-
-## Project Structure
-
-```
-├── app.py                 # Main Streamlit application
-├── src/
-│   ├── ingestion.py       # Document loading and chunking
-│   ├── vector_store.py    # FAISS/Chroma/Pinecone setup
-│   ├── llm_client.py      # LLM provider integration
-│   ├── rag.py             # RAG chain creation
-│   ├── query_rewrite.py   # Query rewriting module
-│   ├── evaluation.py      # Evaluation scripts
-│   └── database.py        # Session management
-├── requirements.txt
-└── README.md
+# Load MTRAG corpus
+docs = load_beir_corpus("path/to/corpus.jsonl")
+queries = load_beir_queries("path/to/queries.jsonl")
+qrels = load_beir_qrels("path/to/qrels/dev.tsv")
 ```
 
----
+## Development
 
-## Troubleshooting
+### Adding New Evaluation Metrics
 
-### Common Issues
+Extend `src/mtrag_evaluator.py` to add custom metrics or integrate additional MTRAG scripts.
 
-1. **"No vector store loaded"**
-   - Upload and process documents first
+### Troubleshooting
 
-2. **"API key required"**
-   - Enter API key in sidebar for selected provider
+| Issue | Solution |
+|-------|----------|
+| Rate limit errors | Use `--limit` flag or local models |
+| "No vector store loaded" | Upload and process documents first |
+| Import errors | Run `pip install -r requirements.txt` |
 
-3. **Slow retrieval**
-   - Reduce Top-K value
-   - Use smaller embedding model
+## References
 
-4. **Generation timeout**
-   - Check API key validity
-   - Try smaller model (e.g., gpt-3.5-turbo)
+- [MTRAG Benchmark](https://github.com/IBM/mt-rag-benchmark) - Official benchmark repository
+- [BEIR Benchmark](https://github.com/beir-cellar/beir) - Information retrieval benchmark format
+- [LangChain](https://python.langchain.com/) - LLM orchestration framework
 
-### Logs
-Check console output for detailed logs. Set `logging.DEBUG` for verbose output.
+## License
+
+MIT License
