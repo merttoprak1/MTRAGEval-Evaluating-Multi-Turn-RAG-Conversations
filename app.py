@@ -12,7 +12,14 @@ from src.ingestion import load_json_documents, chunk_documents, load_beir_corpus
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
 from src.rag import create_rag_chain, convert_mtrag_history_to_messages, run_rag_with_mtrag_input
-from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
+# from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
+DEFAULT_REWRITE_PROMPT = (
+    "Given a chat history and the latest user question "
+    "which might reference context in the chat history, "
+    "formulate a standalone question which can be understood "
+    "without the chat history. Do NOT answer the question, "
+    "just reformulate it if needed and otherwise return it as is."
+)
 from src.mtrag_evaluator import (
     validate_predictions,
     run_retrieval_evaluation,
