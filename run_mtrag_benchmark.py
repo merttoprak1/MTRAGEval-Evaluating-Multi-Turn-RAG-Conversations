@@ -356,9 +356,14 @@ def main():
     
     # Resolve API Key early
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.error("API key required. Set --api_key or GOOGLE_API_KEY env var")
+    
+    if args.provider != "Local" and not api_key:
+        logger.error("API key required for non-local providers. Set --api_key or GOOGLE_API_KEY")
         sys.exit(1)
+        
+    if not api_key:
+        api_key = "not-needed"
+        
     args.api_key = api_key
     
     # Load corpus and setup vector store (for retrieval tasks)
