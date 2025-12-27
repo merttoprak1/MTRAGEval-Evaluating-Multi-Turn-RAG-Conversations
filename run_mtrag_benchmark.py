@@ -119,33 +119,78 @@ def load_reference_tasks(reference_path: Path, corpus_filter: Optional[str] = No
 def run_task_a_retrieval(
     tasks: List[Dict],
     retriever,
+    llm,
     top_k: int = 5
 ) -> List[Dict]:
-    """Run Task A: Retrieval only.
+    """Run Task A: Retrieval only (with Query Rewrite).
     
     Supports both BEIR format (_id, text) and MTRAG format (task_id, input).
     """
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.output_parsers import StrOutputParser
+    
+    # Setup rewrite chain
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+    
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
+    
+    rewrite_chain = contextualize_q_prompt | llm | StrOutputParser()
+    
     predictions = []
     
-    for task in tqdm(tasks, desc="Running retrieval"):
+    for task in tqdm(tasks, desc="Running retrieval (w/ rewrite)"):
         # Handle BEIR format (retrieval tasks)
         if "_id" in task and "text" in task:
             task_id = task.get("_id", "")
             query_text = task.get("text", "")
-            # Extract the last question from multi-turn text
-            lines = query_text.split("|user|:")
-            current_question = lines[-1].strip() if lines else query_text
+            
+            # Helper to parse BEIR text format |user|:...
+            processed_input = []
+            if "|user|:" in query_text:
+                parts = query_text.split("|user|:")
+                for p in parts:
+                    if p.strip():
+                        processed_input.append({"speaker": "user", "text": p.strip()})
+            else:
+                 processed_input.append({"speaker": "user", "text": query_text})
+            
+            history_messages, current_question = convert_mtrag_history_to_messages(processed_input)
+
         # Handle MTRAG format (generation tasks)
         else:
             task_id = task.get("task_id", "")
             input_list = task.get("input", [])
-            _, current_question = convert_mtrag_history_to_messages(input_list)
+            history_messages, current_question = convert_mtrag_history_to_messages(input_list)
         
         conversation_id = task_id.split("<::>")[0] if "<::>" in task_id else task_id
         
-        # Retrieve documents
+        # REWRITE STEP using LLM
+        standalone_question = current_question
+        if history_messages and llm:
+            try:
+                standalone_question = rewrite_chain.invoke({
+                    "history": history_messages,
+                    "input": current_question
+                })
+                # logger.debug(f"Rewritten: '{current_question}' -> '{standalone_question}'")
+            except Exception as e:
+                logger.error(f"Rewrite failed for {task_id}: {e}")
+
+        # Retrieve documents using standalone question
         try:
-            docs = retriever.get_relevant_documents(current_question)[:top_k]
+            docs = retriever.get_relevant_documents(standalone_question)[:top_k]
             contexts = [
                 {
                     "document_id": doc.metadata.get("id", ""),
@@ -309,6 +354,13 @@ def main():
     
     logger.info(f"Running MTRAG Benchmark: corpus={args.corpus}, task={args.task}")
     
+    # Resolve API Key early
+    api_key = args.api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("API key required. Set --api_key or GOOGLE_API_KEY env var")
+        sys.exit(1)
+    args.api_key = api_key
+    
     # Load corpus and setup vector store (for retrieval tasks)
     retriever = None
     if args.task in ["retrieval_taska", "rag_taskc"]:
@@ -334,15 +386,9 @@ def main():
         )
         retriever = vector_store.as_retriever(search_kwargs={"k": args.top_k})
     
-    # Setup LLM (for generation tasks)
+    # Setup LLM (for generation tasks AND retrieval tasks with rewrite)
     llm = None
-    if args.task in ["generation_taskb", "rag_taskc"]:
-        # Get API key from args or environment
-        api_key = args.api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.error("API key required for generation tasks. Set --api_key or GOOGLE_API_KEY env var")
-            sys.exit(1)
-        
+    if args.task in ["generation_taskb", "rag_taskc", "retrieval_taska"]:
         model_name = args.model or ("gemini-flash-latest" if args.provider == "Gemini" else "gpt-3.5-turbo")
         llm = get_llm(args.provider, api_key, model_name=model_name)
     
@@ -358,7 +404,7 @@ def main():
     
     # Run appropriate task
     if args.task == "retrieval_taska":
-        predictions = run_task_a_retrieval(tasks, retriever, args.top_k)
+        predictions = run_task_a_retrieval(tasks, retriever, llm, args.top_k)
     elif args.task == "generation_taskb":
         predictions = run_task_b_generation(tasks, llm)
     else:  # rag_taskc

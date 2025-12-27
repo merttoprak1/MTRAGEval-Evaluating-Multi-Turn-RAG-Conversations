@@ -114,6 +114,28 @@ def create_rag_chain_with_history(llm, retriever):
     
     logger.info("Initializing RAG chain with history support")
     
+    
+    # 1. Contextualize question chain
+    # Given chat history and the latest user question, formulate a standalone question
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+    
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
+    
+    contextualize_q_chain = contextualize_q_prompt | llm | StrOutputParser()
+    
+    # 2. Answer generation chain
     system_prompt = (
         "You are an assistant for question-answering tasks. "
         "Use the following pieces of retrieved context to answer "
@@ -124,7 +146,7 @@ def create_rag_chain_with_history(llm, retriever):
         "{context}"
     )
 
-    prompt = ChatPromptTemplate.from_messages(
+    qa_prompt = ChatPromptTemplate.from_messages(
         [
             ("system", system_prompt),
             MessagesPlaceholder(variable_name="history"),  # Previous conversation turns
@@ -132,23 +154,30 @@ def create_rag_chain_with_history(llm, retriever):
         ]
     )
     
-    # Chain to generate answer from context, history, and input
-    question_answer_chain = (
-        prompt 
-        | llm 
-        | StrOutputParser()
-    )
+    question_answer_chain = qa_prompt | llm | StrOutputParser()
     
-    # RAG Chain with history support
+    # helper for retrieval with standalone question
+    def contextualized_retrieval(input_dict):
+        # Generate standalone question first
+        if input_dict.get("history"):
+            try:
+                standalone_question = contextualize_q_chain.invoke(input_dict)
+                logger.info(f"Rewritten query: '{input_dict['input']}' -> '{standalone_question}'")
+            except Exception as e:
+                logger.error(f"Query rewrite failed: {e}")
+                standalone_question = input_dict["input"]
+        else:
+            standalone_question = input_dict["input"]
+            
+        # Retrieve docs using standalone question
+        return retriever.invoke(standalone_question)
+
+    # 3. Final DAG Chain
     dag_chain = (
         RunnablePassthrough.assign(
-            context=(lambda x: x["input"]) | retriever
+            context=contextualized_retrieval
         )
-        .assign(answer=lambda x: question_answer_chain.invoke({
-            "context": format_docs(x["context"]),
-            "history": x.get("history", []),
-            "input": x["input"]
-        }))
+        .assign(answer=question_answer_chain)
     )
     
     return dag_chain
