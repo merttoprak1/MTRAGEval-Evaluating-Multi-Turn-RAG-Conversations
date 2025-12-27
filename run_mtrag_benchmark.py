@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 # MTRAG Benchmark paths (relative to this script)
 MTRAG_ROOT = Path(__file__).parent.parent
-CORPORA_DIR = MTRAG_ROOT / "corpora"
+CORPORA_DIR = MTRAG_ROOT / "corpora" / "passage_level"  # Use passage_level corpus
 HUMAN_DIR = MTRAG_ROOT / "human"
 RETRIEVAL_TASKS_DIR = HUMAN_DIR / "retrieval_tasks"
 GENERATION_TASKS_DIR = HUMAN_DIR / "generation_tasks"
@@ -72,10 +72,12 @@ def get_corpus_path(corpus_name: str) -> Path:
     raise FileNotFoundError(f"Corpus not found: {corpus_name}")
 
 
-def get_reference_path(task_type: str) -> Path:
+def get_reference_path(task_type: str, corpus_name: str = None) -> Path:
     """Get path to reference JSONL file."""
     if task_type == "generation_taskb" or task_type == "rag_taskc":
         return GENERATION_TASKS_DIR / "reference.jsonl"
+    elif task_type == "retrieval_taska" and corpus_name:
+        return RETRIEVAL_TASKS_DIR / corpus_name / f"{corpus_name}_questions.jsonl"
     else:
         raise ValueError(f"Unknown task type: {task_type}")
 
@@ -86,7 +88,10 @@ def get_qrels_path(corpus_name: str) -> Path:
 
 
 def load_reference_tasks(reference_path: Path, corpus_filter: Optional[str] = None) -> List[Dict]:
-    """Load tasks from reference JSONL file."""
+    """Load tasks from reference JSONL file.
+    
+    Handles both MTRAG format (with Collection field) and BEIR format (_id, text).
+    """
     tasks = []
     with open(reference_path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -95,7 +100,12 @@ def load_reference_tasks(reference_path: Path, corpus_filter: Optional[str] = No
                 continue
             task = json.loads(line)
             
-            # Filter by corpus if specified
+            # For BEIR format (retrieval tasks), no filtering needed
+            if "_id" in task and "text" in task:
+                tasks.append(task)
+                continue
+            
+            # Filter by corpus if specified (for MTRAG generation tasks)
             if corpus_filter:
                 collection = task.get("Collection", "").lower()
                 if corpus_filter.lower() not in collection.lower():
@@ -111,16 +121,27 @@ def run_task_a_retrieval(
     retriever,
     top_k: int = 5
 ) -> List[Dict]:
-    """Run Task A: Retrieval only."""
+    """Run Task A: Retrieval only.
+    
+    Supports both BEIR format (_id, text) and MTRAG format (task_id, input).
+    """
     predictions = []
     
     for task in tqdm(tasks, desc="Running retrieval"):
-        task_id = task.get("task_id", "")
-        conversation_id = task.get("conversation_id", "")
-        input_list = task.get("input", [])
+        # Handle BEIR format (retrieval tasks)
+        if "_id" in task and "text" in task:
+            task_id = task.get("_id", "")
+            query_text = task.get("text", "")
+            # Extract the last question from multi-turn text
+            lines = query_text.split("|user|:")
+            current_question = lines[-1].strip() if lines else query_text
+        # Handle MTRAG format (generation tasks)
+        else:
+            task_id = task.get("task_id", "")
+            input_list = task.get("input", [])
+            _, current_question = convert_mtrag_history_to_messages(input_list)
         
-        # Get current question from input
-        _, current_question = convert_mtrag_history_to_messages(input_list)
+        conversation_id = task_id.split("<::>")[0] if "<::>" in task_id else task_id
         
         # Retrieve documents
         try:
@@ -326,7 +347,7 @@ def main():
         llm = get_llm(args.provider, api_key, model_name=model_name)
     
     # Load reference tasks
-    reference_path = get_reference_path(args.task)
+    reference_path = get_reference_path(args.task, args.corpus)
     logger.info(f"Loading tasks from: {reference_path}")
     tasks = load_reference_tasks(reference_path, corpus_filter=args.corpus)
     
