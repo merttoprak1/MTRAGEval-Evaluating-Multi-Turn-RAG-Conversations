@@ -7,7 +7,8 @@ import platform
 import logging
 import sys
 import json
-from src.ingestion import load_json_documents, chunk_documents
+from pathlib import Path
+from src.ingestion import load_json_documents, chunk_documents, load_beir_corpus
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
@@ -382,14 +383,169 @@ def main():
 
     # --- Main Content ---
     
-    # Tabs: 2 new + 3 existing
-    tab_rag, tab_eval, tab_chat, tab_manage, tab_db = st.tabs([
+    # Tabs: MTRAG Benchmark + existing tabs (Evaluation Playground removed)
+    tab_rag, tab_mtrag, tab_chat, tab_manage, tab_db = st.tabs([
         "🎯 RAG Playground", 
-        "📊 Evaluation Playground",
+        "📈 MTRAG Benchmark",
         "💬 Chat", 
         "🛠️ Manage Collection", 
         "🔍 Database Inspector"
     ])
+
+    # ==================== TAB: MTRAG Benchmark ====================
+    with tab_mtrag:
+        st.header("📈 MTRAG Benchmark")
+        st.markdown("""
+        Run official MTRAG benchmark evaluation on your RAG system.
+        This uses the multi-turn conversation dataset from IBM Research.
+        """)
+        
+        # MTRAG Configuration
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            mtrag_corpus = st.selectbox(
+                "Select Corpus",
+                ["clapnq", "cloud", "fiqa", "govt"],
+                help="MTRAG corpus to evaluate on"
+            )
+            
+            mtrag_task = st.selectbox(
+                "Select Task",
+                ["generation_taskb", "retrieval_taska", "rag_taskc"],
+                format_func=lambda x: {
+                    "retrieval_taska": "Task A: Retrieval Only",
+                    "generation_taskb": "Task B: Generation (with provided contexts)",
+                    "rag_taskc": "Task C: Full RAG Pipeline"
+                }.get(x, x),
+                help="MTRAG task type"
+            )
+        
+        with col2:
+            mtrag_limit = st.number_input(
+                "Number of Tasks",
+                min_value=1,
+                max_value=100,
+                value=10,
+                help="Limit number of tasks to run (for faster testing)"
+            )
+            
+            skip_eval = st.checkbox(
+                "Skip Evaluation",
+                value=False,
+                help="Skip MTRAG evaluation after generating predictions"
+            )
+        
+        st.divider()
+        
+        # Run Benchmark Button
+        # Run Benchmark Button
+        if st.button("▶️ Run MTRAG Benchmark", type="primary", key="run_mtrag_btn"):
+            if provider != "Local" and not api_key:
+                st.error("❌ Please provide API key in the sidebar for non-local providers")
+            else:
+                try:
+                    import subprocess
+                    import sys
+                    
+                    # Prepare command
+                    cmd = [
+                        sys.executable, "run_mtrag_benchmark.py",
+                        "--corpus", mtrag_corpus,
+                        "--task", mtrag_task,
+                        "--limit", str(mtrag_limit),
+                        "--provider", provider,
+                        "--model", model_name
+                    ]
+                    
+                    if provider == "Local":
+                        if base_url:
+                            cmd.extend(["--base_url", base_url])
+                    else:
+                        cmd.extend(["--api_key", api_key])
+                        
+                    if skip_eval:
+                        cmd.append("--skip_eval")
+                        
+                    # Output file path (must match what run_mtrag_benchmark.py uses)
+                    # It creates files like: results/{task}/{corpus}_predictions.jsonl
+                    # We can use the --output arg to be sure
+                    output_file = Path("results") / mtrag_task / f"{mtrag_corpus}_predictions.jsonl"
+                    cmd.extend(["--output", str(output_file)])
+                    
+                    st.info(f"Executing: {' '.join(cmd)}")
+                    
+                    with st.spinner(f"Running MTRAG benchmark on {mtrag_corpus}..."):
+                        # Run command
+                        process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            encoding='utf-8',
+                            errors='replace' # Handle encoding errors gracefully
+                        )
+                        
+                        # Real-time output container
+                        output_container = st.empty()
+                        logs = []
+                        
+                        # Read logs in real-time
+                        while True:
+                            output = process.stdout.readline()
+                            if output == '' and process.poll() is not None:
+                                break
+                            if output:
+                                line = output.strip()
+                                logs.append(line)
+                                # Show last few lines of log
+                                output_container.code("\n".join(logs[-10:]), language="bash")
+                        
+                        # Check exit code
+                        return_code = process.poll()
+                        if return_code != 0:
+                            stderr = process.stderr.read()
+                            st.error(f"Benchmark failed with code {return_code}")
+                            st.error(stderr)
+                        else:
+                            st.success("✅ Benchmark completed successfully!")
+                            
+                            # Load and display results
+                            if output_file.exists():
+                                st.subheader("📋 Predictions")
+                                predictions = []
+                                with open(output_file, 'r', encoding='utf-8') as f:
+                                    for line in f:
+                                        predictions.append(json.loads(line))
+                                
+                                # Display table
+                                results_df = pd.DataFrame([
+                                    {
+                                        "Task ID": p.get("task_id", "")[:20] + "...",
+                                        "Conversation ID": p.get("conversation_id", ""),
+                                        "Prediction": str(p.get("predictions", ""))[:100] + "...",
+                                        "Contexts": len(p.get("contexts", []))
+                                    }
+                                    for p in predictions
+                                ])
+                                st.dataframe(results_df, use_container_width=True)
+                                
+                                # Download button
+                                with open(output_file, "r", encoding='utf-8') as f:
+                                    jsonl_content = f.read()
+                                
+                                st.download_button(
+                                    "📥 Download Predictions (JSONL)",
+                                    data=jsonl_content,
+                                    file_name=output_file.name,
+                                    mime="application/jsonl"
+                                )
+                            else:
+                                st.warning(f"Output file not found at {output_file}")
+                                
+                except Exception as e:
+                    st.error(f"❌ Execution error: {e}")
+                    logger.error(f"Benchmark execution error: {e}", exc_info=True)
 
     # ==================== TAB 1: RAG Playground ====================
     with tab_rag:
@@ -1815,7 +1971,7 @@ def main():
         #         if 'generation' in run:
         #             st.write(f"**Answer Preview:** {run['generation'].get('answer', '')[:200]}...")
 
-    # ==================== TAB 3: Chat (existing) ====================
+        # ==================== TAB 3: Chat (existing) ====================
     with tab_chat:
         st.header("Chat")
         
