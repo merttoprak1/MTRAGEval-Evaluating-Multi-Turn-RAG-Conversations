@@ -12,8 +12,11 @@ from src.vector_store import setup_vector_store, get_retriever, add_to_vector_st
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
-from src.evaluation import run_evaluation, EvaluationResult
 from src.database import init_db, create_session, get_sessions, save_message, load_session_history, delete_session, rename_session
+from src.beir_utils import (
+    AVAILABLE_CORPORA, QUERY_TYPES, get_retrieval_task_paths,
+    load_qrels, load_queries, calculate_retrieval_metrics
+)
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
@@ -1269,148 +1272,130 @@ def main():
         # Input Configuration
         st.subheader("📝 Evaluation Input")
         
-        # input_method = st.radio(
-        #     "Input Method",
-        #     ["Manual Input", "Upload Dataset", "Use Last Run"],
-        #     horizontal=True,
-        #     key="eval_input_method"
-        # )
-        
-        # eval_query = None
-        # eval_ground_truth_answer = None
-        # eval_ground_truth_docs = None
-        # use_last_run = False
         eval_dataset = None
+        eval_dataset_path = None
+        beir_qrels = None
+        beir_queries = None
         
-        # if input_method == "Manual Input":
-        #     input_col1, input_col2 = st.columns(2)
+        # Task A: BEIR Format Configuration
+        if eval_selected_task == "A":
+            st.info("📋 **Task A uses BEIR format** with pre-loaded queries and relevance judgments (qrels)")
+            st.caption("ℹ️ *Corpus seçimi şuanlık sadece önizleme amaçlıdır. Evaluation sırasında predictions dosyasındaki `Collection` alanı kullanılır.*")
             
-        #     with input_col1:
-        #         st.markdown("**Query**")
-        #         eval_query = st.text_area(
-        #             "Enter the query to evaluate",
-        #             placeholder="What is the capital of France?",
-        #             height=100,
-        #             key="eval_manual_query"
-        #         )
+            beir_col1, beir_col2 = st.columns(2)
             
-        #     with input_col2:
-        #         st.markdown("**Ground Truth (Optional)**")
-        #         eval_ground_truth_answer = st.text_area(
-        #             "Expected Answer",
-        #             placeholder="The capital of France is Paris.",
-        #             height=100,
-        #             key="eval_gt_answer",
-        #             help="The correct/expected answer for evaluation"
-        #         )
+            with beir_col1:
+                st.markdown("**Select Corpus**")
+                selected_corpus = st.selectbox(
+                    "Corpus",
+                    options=AVAILABLE_CORPORA,
+                    format_func=lambda x: {
+                        "clapnq": "ClapNQ (Wikipedia)",
+                        "cloud": "Cloud (Technical Docs)",
+                        "fiqa": "FiQA (Finance)",
+                        "govt": "Govt (Government)"
+                    }.get(x, x),
+                    key="beir_corpus_selector",
+                    help="Select the document corpus for retrieval evaluation"
+                )
+                
+            with beir_col2:
+                st.markdown("**Select Query Type**")
+                selected_query_type = st.selectbox(
+                    "Query Type",
+                    options=list(QUERY_TYPES.keys()),
+                    format_func=lambda x: QUERY_TYPES[x],
+                    key="beir_query_type_selector",
+                    help="Choose query format: full conversation, last turn only, or rewritten queries"
+                )
             
-        #     # Ground truth documents (for retrieval evaluation)
-        #     with st.expander("📄 Ground Truth Documents (Optional)", expanded=False):
-        #         st.markdown("Enter document IDs or content that should be retrieved:")
-        #         eval_ground_truth_docs = st.text_area(
-        #             "Ground Truth Documents",
-        #             placeholder="doc_id_1, doc_id_2\nOR\nPaste relevant document content here...",
-        #             height=100,
-        #             key="eval_gt_docs",
-        #             help="Comma-separated doc IDs or relevant document content"
-        #         )
+            # Load and display BEIR data
+            try:
+                paths = get_retrieval_task_paths(selected_corpus, selected_query_type)
+                beir_qrels = load_qrels(paths["qrels"])
+                beir_queries = load_queries(paths["queries"])
+                
+                # Display stats
+                stats_col1, stats_col2, stats_col3 = st.columns(3)
+                with stats_col1:
+                    st.metric("📄 Queries", len(beir_queries))
+                with stats_col2:
+                    st.metric("📋 Qrels (Query-Doc Pairs)", sum(len(v) for v in beir_qrels.values()))
+                with stats_col3:
+                    st.metric("🎯 Queries with Relevance", len(beir_qrels))
+                
+                # Preview sample queries
+                with st.expander("👁️ Preview Sample Queries", expanded=False):
+                    sample_queries = list(beir_queries.items())[:5]
+                    for qid, qtext in sample_queries:
+                        st.markdown(f"**{qid}**")
+                        st.caption(qtext[:200] + "..." if len(qtext) > 200 else qtext)
+                        st.divider()
+                
+                # File uploader for Task A predictions
+                st.markdown("---")
+                st.markdown("**📤 Upload Your Retrieval Predictions**")
+                task_a_predictions = st.file_uploader(
+                    "Upload JSONL file with your retrieval results",
+                    type=["jsonl", "json"],
+                    key="task_a_predictions_upload",
+                    help="File should contain: task_id, Collection, contexts (with document_id and score)"
+                )
+                task_a_predictions_path = None
+                if task_a_predictions is not None:
+                    suffix = f".{task_a_predictions.name.split('.')[-1]}"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                        temp_file.write(task_a_predictions.getvalue())
+                        task_a_predictions_path = temp_file.name
+                    st.success(f"✅ Loaded: {task_a_predictions.name}")
+                        
+            except Exception as e:
+                st.error(f"❌ Failed to load BEIR data: {e}")
+                beir_qrels = None
+                beir_queries = None
+                task_a_predictions_path = None
         
-        # elif input_method == "Upload Dataset":
-        dataset_col1, dataset_col2 = st.columns(2)
-        
-        with dataset_col1:
-            st.markdown("**Upload Test Dataset**")
-            eval_dataset = st.file_uploader(
-                "Upload JSON/JSONL with test queries and ground truth",
-                type=["json", "jsonl"],
-                key="eval_dataset_upload",
-                help="File should contain: query, ground_truth_answer (optional), ground_truth_docs (optional)"
-            )
-            if eval_dataset is not None:
-                suffix = f".{eval_dataset.name.split('.')[-1]}"
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-                            temp_file.write(eval_dataset.getvalue())
-                            eval_dataset_path = temp_file.name
-                st.success(f"✅ Loaded: {eval_dataset.name}")
-        # Expeced formats for scripts
-        EXPECTED_FORMATS = {
-            "Task A - Retrieval": '''
-            {
-                "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                "input": [
-                    {
-                    "speaker": "user",
-                    "text": "where do the arizona cardinals play this week"
-                    }
-                ]
-                "contexts":
-                    [
-                        {
-                            "document_id": "822086267_7384-8758-0-1374",
-                            "text": "...",
-                            "score": 27.759
-                        }, ...
-                    ],
-                }''',
-            "Task B - Generation": '''
-            {
-                "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                "input": [
-                    {
-                    "speaker": "user",
-                    "text": "where do the arizona cardinals play this week"
-                    }
-                ]
-                "contexts":
-                    [
-                        {
-                            "document_id": "822086267_7384-8758-0-1374",
-                            "text": "...",
-                            "score": 27.759
-                        }, ...
-                    ],
-                    "predictions":
-                    [
-                        {
-                            "text": "..."
-                        }
-                    ]
-                }''',
-            "Task C - Full RAG (Rewrite + Retrieval + Generation)": '''
+        # Task B/C: File Upload
+        # Task B/C: File Upload
+        else:
+            dataset_col1, dataset_col2 = st.columns(2)
+            
+            with dataset_col1:
+                st.markdown("**Upload Test Dataset**")
+                eval_dataset = st.file_uploader(
+                    "Upload JSON/JSONL with test queries and ground truth",
+                    type=["json", "jsonl"],
+                    key="eval_dataset_upload",
+                    help="File should contain: query, ground_truth_answer (optional), ground_truth_docs (optional)"
+                )
+                if eval_dataset is not None:
+                    suffix = f".{eval_dataset.name.split('.')[-1]}"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                        temp_file.write(eval_dataset.getvalue())
+                        eval_dataset_path = temp_file.name
+                    st.success(f"✅ Loaded: {eval_dataset.name}")
+            
+            # Expected formats for scripts (Task B/C only)
+            EXPECTED_FORMATS = {
+                "Task B - Generation": '''
                 {
-                    "conversation_id": "dd6b6ffd177f2b311abe676261279d2f",
-                    "task_id": "dd6b6ffd177f2b311abe676261279d2f::2",
-                    "Collection": "mt-rag-clapnq-elser-512-100-20240503",
-                    "input": [
-                        {
-                        "speaker": "user",
-                        "text": "where do the arizona cardinals play this week"
-                        }
-                    ]
-                    "contexts":
-                        [
-                            {
-                                "document_id": "822086267_7384-8758-0-1374",
-                                "text": "...",
-                                "score": 27.759
-                            }, ...
-                        ],
-                        "predictions":
-                        [
-                            {
-                                "text": "..."
-                            }
-                        ]
-                    }'''
-        }
-
-        with dataset_col2:
-            st.markdown("**Expected Format:**")
-            st.code(EXPECTED_FORMATS.get(selected_category, ""), language="json")
+                    "conversation_id": "...",
+                    "task_id": "...",
+                    "contexts": [{"document_id": "...", "text": "..."}],
+                    "predictions": [{"text": "..."}]
+                }''',
+                "Task C - Full RAG (Rewrite + Retrieval + Generation)": '''
+                {
+                    "conversation_id": "...",
+                    "task_id": "...",
+                    "contexts": [{"document_id": "...", "text": "..."}],
+                    "predictions": [{"text": "..."}]
+                }'''
+            }
+            
+            with dataset_col2:
+                st.markdown("**Expected Format:**")
+                st.code(EXPECTED_FORMATS.get(selected_category, "Upload a valid JSONL file"), language="json")
         
         # else:  # Use Last Run
         #     if st.session_state.run_result:
@@ -1467,62 +1452,160 @@ def main():
         st.divider()
         
         # Run Evaluation Button
-        # eval_ready = len(selected_scripts) > 0 and (eval_dataset or use_last_run or eval_query)
-        eval_ready = eval_dataset
-
+        # Determine if ready to evaluate
+        if eval_selected_task == "A":
+            # Task A requires BEIR data + predictions file
+            eval_ready = (beir_qrels is not None and beir_queries is not None and 
+                         'task_a_predictions_path' in dir() and task_a_predictions_path is not None)
+        else:
+            eval_ready = eval_dataset is not None
+        
         if st.button("🚀 Run Evaluation", type="primary", disabled=not eval_ready):
             if not eval_ready:
-                st.warning("Please upload a file to evaluate.")
+                if eval_selected_task == "A":
+                    st.warning("Please select a valid corpus with queries and qrels.")
+                else:
+                    st.warning("Please upload a file to evaluate.")
             else:
                 with st.spinner("Running evaluation..."):
                     import time
                     eval_start = time.time()
                     
-                    # Determine what data to use
-                    run_data = None
+                    # Set up venv python path
                     if platform.system() == "Windows":
                         venv_python = os.path.abspath("src/evaluation/venv/Scripts/python.exe")
                     else:
-                        # Linux and macOS
                         venv_python = os.path.abspath("src/evaluation/venv/bin/python")
                     
-                    output_path = eval_dataset_path.replace(suffix, "_results.json")
-                
-                    run_retrieval_eval_command = [
-                        venv_python, "src/evaluation/run_retrieval_eval.py",
-                        "--input_file", eval_dataset_path,
-                        "--output_file", output_path,
-                    ]
-                    
-                    run_gen_eval_command = [
-                        venv_python, "src/evaluation/run_generation_eval.py",
-                        "-i", eval_dataset_path,
-                        "-o", output_path,
-                        "-e", "src/evaluation/config.yaml",
-                        "--provider", "hf",
-                        "--judge_model", judge_provider
-                    ]
-                    selected_script = run_retrieval_eval_command if eval_selected_task == "A" else run_gen_eval_command
-                    with st.status("Evaluating...", expanded=True) as status:
-                        result = subprocess.run(selected_script, capture_output=True, text=True)
+                    if eval_selected_task == "A":
+                        # Task A: Run retrieval evaluation with official script
+                        st.subheader("📊 Task A Retrieval Evaluation")
                         
-                        if result.returncode == 0:
-                            status.update(label="✅ Evaluation Complete!", state="complete")
-                            time.sleep(10)
-                            # 3. Provide the download button
-                            if os.path.exists(output_path):
-                                with open(output_path, "rb") as f:
-                                    st.download_button(
-                                        label="📥 Download Evaluation Results",
-                                        data=f,
-                                        file_name="evaluation_results.json",
-                                        mime="application/json"
-                                    )
-                            else:
-                                st.error("Script finished but no output file was found.")
+                        # Show corpus and query info
+                        st.info(f"""
+                        **Evaluation Configuration:**
+                        - Corpus: **{selected_corpus.upper()}**
+                        - Query Type: **{QUERY_TYPES[selected_query_type]}**
+                        - Total Queries: **{len(beir_queries)}**
+                        - Queries with Relevance Judgments: **{len(beir_qrels)}**
+                        """)
+                        
+                        # Check if predictions file was uploaded
+                        if task_a_predictions_path:
+                            output_path = task_a_predictions_path.replace(".jsonl", "_results.json").replace(".json", "_results.json")
+                            
+                            run_retrieval_eval_command = [
+                                venv_python, "src/evaluation/run_retrieval_eval.py",
+                                "--input_file", task_a_predictions_path,
+                                "--output_file", output_path,
+                            ]
+                            
+                            with st.status("Running Retrieval Evaluation...", expanded=True) as status:
+                                st.write("📂 Input file:", task_a_predictions_path)
+                                st.write("📊 Running official MTRAG retrieval evaluation...")
+                                
+                                result = subprocess.run(
+                                    run_retrieval_eval_command, 
+                                    capture_output=True, 
+                                    text=True,
+                                    cwd=os.path.dirname(os.path.abspath(__file__))
+                                )
+                                
+                                if result.returncode == 0:
+                                    status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
+                                    
+                                    # Show stdout output (contains metrics)
+                                    if result.stdout:
+                                        st.subheader("📈 Retrieval Metrics")
+                                        st.code(result.stdout)
+                                    
+                                    # Check for aggregate CSV file
+                                    aggregate_csv = output_path.replace("_results.json", "_results_aggregate.csv")
+                                    if os.path.exists(aggregate_csv):
+                                        st.subheader("📋 Aggregate Results")
+                                        import pandas as pd
+                                        df = pd.read_csv(aggregate_csv)
+                                        st.dataframe(df)
+                                    
+                                    # Download enriched results
+                                    if os.path.exists(output_path):
+                                        with open(output_path, "rb") as f:
+                                            st.download_button(
+                                                label="📥 Download Enriched Results",
+                                                data=f,
+                                                file_name="retrieval_eval_results.json",
+                                                mime="application/json"
+                                            )
+                                else:
+                                    status.update(label="❌ Evaluation Failed", state="error")
+                                    st.error("Evaluation script failed")
+                                    if result.stderr:
+                                        st.code(result.stderr)
                         else:
-                            status.update(label="❌ Evaluation Failed", state="error")
-                            st.error(result.stderr)
+                            # No predictions file - show sample format
+                            st.warning("⚠️ Please upload your retrieval predictions file above")
+                            with st.expander("📋 Expected Input Format", expanded=True):
+                                st.code('''
+{
+  "task_id": "dd6b6ffd177f2b311abe676261279d2f<::>2",
+  "Collection": "mt-rag-clapnq-elser-512-100-20240503",
+  "contexts": [
+    {"document_id": "822086267_7384-8758-0-1374", "score": 27.759},
+    {"document_id": "123456789_1234-5678", "score": 25.123}
+  ]
+}''', language="json")
+                        
+                        eval_time = time.time() - eval_start
+                        st.caption(f"⏱️ Completed in {eval_time:.2f}s")
+                    
+                    else:
+                        # Task B/C: Use existing evaluation scripts
+                        run_data = None
+                        if platform.system() == "Windows":
+                            venv_python = os.path.abspath("src/evaluation/venv/Scripts/python.exe")
+                        else:
+                            # Linux and macOS
+                            venv_python = os.path.abspath("src/evaluation/venv/bin/python")
+                        
+                        suffix = f".{eval_dataset.name.split('.')[-1]}" if eval_dataset else ".jsonl"
+                        output_path = eval_dataset_path.replace(suffix, "_results.json")
+                    
+                        run_retrieval_eval_command = [
+                            venv_python, "src/evaluation/run_retrieval_eval.py",
+                            "--input_file", eval_dataset_path,
+                            "--output_file", output_path,
+                        ]
+                        
+                        run_gen_eval_command = [
+                            venv_python, "src/evaluation/run_generation_eval.py",
+                            "-i", eval_dataset_path,
+                            "-o", output_path,
+                            "-e", "src/evaluation/config.yaml",
+                            "--provider", "hf",
+                            "--judge_model", judge_provider
+                        ]
+                        selected_script = run_gen_eval_command
+                        
+                        with st.status("Evaluating...", expanded=True) as status:
+                            result = subprocess.run(selected_script, capture_output=True, text=True)
+                            
+                            if result.returncode == 0:
+                                status.update(label="✅ Evaluation Complete!", state="complete")
+                                time.sleep(2)
+                                # Provide the download button
+                                if os.path.exists(output_path):
+                                    with open(output_path, "rb") as f:
+                                        st.download_button(
+                                            label="📥 Download Evaluation Results",
+                                            data=f,
+                                            file_name="evaluation_results.json",
+                                            mime="application/json"
+                                        )
+                                else:
+                                    st.error("Script finished but no output file was found.")
+                            else:
+                                status.update(label="❌ Evaluation Failed", state="error")
+                                st.error(result.stderr)
                     # if use_last_run and st.session_state.run_result:
                     #     # Use existing run result
                     #     run_data = st.session_state.run_result
