@@ -383,18 +383,18 @@ def main():
 
     # --- Main Content ---
     
-    # Tabs: MTRAG Benchmark + existing tabs (Evaluation Playground removed)
-    tab_rag, tab_mtrag, tab_chat, tab_manage, tab_db = st.tabs([
+    # Tabs: 2 new + 3 existing
+    tab_rag, tab_eval, tab_chat, tab_manage, tab_db = st.tabs([
         "🎯 RAG Playground", 
-        "📈 MTRAG Benchmark",
+        "📊 Evaluation Playground",
         "💬 Chat", 
         "🛠️ Manage Collection", 
         "🔍 Database Inspector"
     ])
 
-    # ==================== TAB: MTRAG Benchmark ====================
-    with tab_mtrag:
-        st.header("📈 MTRAG Benchmark")
+    # ==================== TAB: Evaluation Playground (MTRAG Benchmark merged here) ====================
+    with tab_eval:
+        st.header("📊 Evaluation Playground")
         st.markdown("""
         Run official MTRAG benchmark evaluation on your RAG system.
         This uses the multi-turn conversation dataset from IBM Research.
