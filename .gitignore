@@ -8,3 +8,4 @@ faiss_db_*/
 corpora/*.jsonl
 corpora/*.zip
 human/generation_tasks/*.jsonl
+venv
