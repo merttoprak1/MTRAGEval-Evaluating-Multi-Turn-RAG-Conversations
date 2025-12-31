@@ -62,19 +62,24 @@ def _setup_faiss(documents: List[Document], embedding_model, collection_name: st
     index_name = db_config.get("index_name", "default") if db_config else "default"
     persist_directory = f"./faiss_db_{collection_name}_{index_name}"
     vector_store = None
+    index_loaded = False
     
     # Try to load existing
     if os.path.exists(persist_directory):
         try:
             logger.info(f"Loading existing FAISS index from {persist_directory}")
             vector_store = FAISS.load_local(persist_directory, embedding_model, allow_dangerous_deserialization=True)
+            index_loaded = True
+            logger.info(f"Successfully loaded existing FAISS index with {vector_store.index.ntotal} vectors")
         except Exception as e:
             logger.warning(f"Failed to load existing index: {e}")
-
-    if documents:
-        logger.info(f"Ingesting {len(documents)} documents into FAISS")
-        batch_size = 1 if is_gemini else 1000 
-        delay = 4.0 if is_gemini else 0.0 
+    
+    # Only ingest documents if no existing index was loaded
+    if documents and not index_loaded:
+        logger.info(f"Ingesting {len(documents)} documents into FAISS (this may take a while...)")
+        # Use larger batch size for efficiency
+        batch_size = 100 if is_gemini else 1000 
+        delay = 1.0 if is_gemini else 0.0  # Reduced delay
         total_docs = len(documents)
         
         start_index = 0
@@ -88,13 +93,21 @@ def _setup_faiss(documents: List[Document], embedding_model, collection_name: st
         
         for i in range(start_index, total_docs, batch_size):
             batch = documents[i:i+batch_size]
-            logger.info(f"Adding batch {i//batch_size + 1} ({len(batch)} docs)")
+            batch_num = i // batch_size + 1
+            total_batches = (total_docs + batch_size - 1) // batch_size
+            logger.info(f"Adding batch {batch_num}/{total_batches} ({len(batch)} docs, {i+len(batch)}/{total_docs} total)")
             vector_store.add_documents(batch)
-            vector_store.save_local(persist_directory)
+            # Save periodically every 10 batches
+            if batch_num % 10 == 0:
+                vector_store.save_local(persist_directory)
             if is_gemini and (i + batch_size < total_docs):
                 time.sleep(delay)
         
+        # Final save
+        vector_store.save_local(persist_directory)
         logger.info("FAISS ingestion complete")
+    elif index_loaded:
+        logger.info("Using existing FAISS index, skipping ingestion")
     
     return vector_store
 

@@ -5,3 +5,7 @@ langchain-openai
 langchain-google-genai
 langchain-core
 faiss-cpu
+pytrec_eval
+python-dotenv
+tqdm
+httpx
