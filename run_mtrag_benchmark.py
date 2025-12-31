@@ -190,7 +190,7 @@ def run_task_a_retrieval(
 
         # Retrieve documents using standalone question
         try:
-            docs = retriever.get_relevant_documents(standalone_question)[:top_k]
+            docs = retriever.invoke(standalone_question)[:top_k]
             contexts = [
                 {
                     "document_id": doc.metadata.get("id", ""),
@@ -345,6 +345,12 @@ def main():
                         help="Skip evaluation after running predictions")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit number of tasks to run (for testing)")
+    parser.add_argument("--base_url", type=str, default=None,
+                        help="Base URL for local LLM server (e.g., http://127.0.0.1:1234)")
+    parser.add_argument("--embedding_base_url", type=str, default="http://localhost:11434",
+                        help="Base URL for local embedding server (default: Ollama at http://localhost:11434)")
+    parser.add_argument("--embedding_model", type=str, default="nomic-embed-text",
+                        help="Embedding model name (default: nomic-embed-text)")
     
     args = parser.parse_args()
     
@@ -377,11 +383,26 @@ def main():
         chunks = chunk_documents(documents)
         
         logger.info(f"Setting up vector store with {len(chunks)} chunks...")
-        embedding_config = {
-            "provider": args.embedding_provider,
-            "api_key": args.api_key,
-            "model_name": "models/text-embedding-004" if args.embedding_provider == "Gemini" else "text-embedding-3-small"
-        }
+        
+        # Configure embedding based on provider
+        if args.embedding_provider == "Local":
+            embedding_config = {
+                "provider": "Local",
+                "base_url": args.embedding_base_url,
+                "model_name": args.embedding_model
+            }
+        elif args.embedding_provider == "Gemini":
+            embedding_config = {
+                "provider": "Gemini",
+                "api_key": args.api_key,
+                "model_name": "models/text-embedding-004"
+            }
+        else:  # OpenAI
+            embedding_config = {
+                "provider": "OpenAI",
+                "api_key": args.api_key,
+                "model_name": "text-embedding-3-small"
+            }
         
         vector_store = setup_vector_store(
             chunks,
@@ -395,7 +416,8 @@ def main():
     llm = None
     if args.task in ["generation_taskb", "rag_taskc", "retrieval_taska"]:
         model_name = args.model or ("gemini-flash-latest" if args.provider == "Gemini" else "gpt-3.5-turbo")
-        llm = get_llm(args.provider, api_key, model_name=model_name)
+        base_url = args.base_url or None
+        llm = get_llm(args.provider, api_key, base_url=base_url, model_name=model_name)
     
     # Load reference tasks
     reference_path = get_reference_path(args.task, args.corpus)
