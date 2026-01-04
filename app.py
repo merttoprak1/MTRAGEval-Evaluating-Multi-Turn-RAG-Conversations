@@ -620,12 +620,16 @@ def main():
                                 # Format Contexts
                                 contexts = []
                                 for doc, score in docs_with_scores:
+                                    # Ensure text and title are present for Task C pipeline compatibility
                                     contexts.append({
                                         "document_id": doc.metadata.get("id", "unknown_id"),
-                                        "text": doc.page_content,
                                         "score": float(score),
-                                        "title": doc.metadata.get("title", "")
+                                        "title": doc.metadata.get("title", "No Title"),
+                                        "text": doc.page_content  # Required for generation
                                     })
+                                
+                                # Sort contexts by score in descending order (highest score first)
+                                contexts.sort(key=lambda x: x['score'], reverse=True)
                                 
                                 # Create Result Object matches format for run_retrieval_eval.py
                                 result_obj = {
