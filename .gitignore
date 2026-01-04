@@ -9,3 +9,4 @@ corpora/*.jsonl
 corpora/*.zip
 human/generation_tasks/*.jsonl
 venv
+.DS_Store

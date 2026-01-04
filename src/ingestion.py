@@ -98,58 +98,47 @@ def chunk_documents(documents: List[Document], chunk_size: int = 1000, chunk_ove
 
 # ==================== BEIR Format Support ====================
 
-def load_beir_corpus(corpus_path: str) -> List[Document]:
+def load_beir_queries(queries_path: str) -> Dict[str, str]:
     """
-    Load BEIR format corpus (JSONL).
-    
-    Expected format per line:
-    {"_id": "doc1", "title": "Document Title", "text": "Document content..."}
-    
-    Args:
-        corpus_path: Path to corpus.jsonl file
-        
-    Returns:
-        List of LangChain Document objects
+    Load BEIR format queries (JSONL).
     """
-    logger.info(f"Loading BEIR corpus from {corpus_path}")
-    documents = []
+    logger.info(f"Loading BEIR queries from {queries_path}")
+    queries = {}
     
     try:
-        with open(corpus_path, 'r', encoding='utf-8') as f:
+        with open(queries_path, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    doc_data = json.loads(line)
+                    query_data = json.loads(line)
+                    # Updated to check for 'task_id' as well
+                    query_id = query_data.get('_id', query_data.get('id', query_data.get('task_id', f'q_{line_num}')))
                     
-                    # BEIR format fields
-                    doc_id = doc_data.get('_id', doc_data.get('id', f'doc_{line_num}'))
-                    title = doc_data.get('title', '')
-                    text = doc_data.get('text', '')
+                    # Handle text/input fields
+                    query_text = query_data.get('text', query_data.get('input', ''))
                     
-                    # Create page content
-                    page_content = f"Title: {title}\n\n{text}" if title else text
-                    
-                    # Metadata includes all fields except 'text'
-                    metadata = {
-                        'id': doc_id,
-                        'title': title,
-                        **{k: v for k, v in doc_data.items() if k not in ['text', '_id', 'id', 'title']}
-                    }
-                    
-                    documents.append(Document(page_content=page_content, metadata=metadata))
-                    
+                    if isinstance(query_text, list): # Handle conversation history if passed as list
+                        # Take the last turn as the query
+                        if len(query_text) > 0 and isinstance(query_text[-1], dict):
+                             query_text = query_text[-1].get('text', '')
+                        else:
+                             query_text = str(query_text)
+
+                    if query_id and query_text:
+                        queries[query_id] = query_text
+                        
                 except json.JSONDecodeError as e:
                     logger.warning(f"Skipping invalid JSON at line {line_num}: {e}")
                     continue
                     
-        logger.info(f"Loaded {len(documents)} documents from BEIR corpus")
-        return documents
+        logger.info(f"Loaded {len(queries)} queries")
+        return queries
         
     except Exception as e:
-        logger.error(f"Error loading BEIR corpus: {e}", exc_info=True)
-        return []
+        logger.error(f"Error loading BEIR queries: {e}", exc_info=True)
+        return {}
 
 
 def load_beir_queries(queries_path: str) -> Dict[str, str]:
