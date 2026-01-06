@@ -729,8 +729,6 @@ def main():
 
             st.divider()
             
-            # --- RUN EVALUATION BUTTON ---
-            # Check readiness
             is_ready = False
             if selected_category == "Task A":
                 is_ready = (eval_dataset_path is not None and beir_qrels is not None)
@@ -738,48 +736,99 @@ def main():
                 is_ready = (eval_dataset_path is not None)
 
             if st.button("🚀 Run Evaluation", type="primary", disabled=not is_ready):
-                with st.spinner("Calculating metrics..."):
-                    import time
-                    start_eval = time.time()
-                    
-                    # Resolve Python Interpreter
-                    if platform.system() == "Windows":
-                        venv_python = os.path.abspath("src/evaluation/venv/Scripts/python.exe")
+                if not is_ready:
+                    if selected_category == "Task A":
+                        st.warning("Please select a valid corpus with queries and qrels.")
                     else:
-                        venv_python = os.path.abspath("src/evaluation/venv/bin/python")
+                        st.warning("Please upload a file to evaluate.")
+                else:
+                    with st.spinner("Running evaluation..."):
+                        import time
+                        eval_start = time.time()
                     
-                    # Define Output Path
-                    output_path = eval_dataset_path.replace(".jsonl", "_results.json")
-                    
-                    # Logic Branching
-                    try:
+                        # Use the currently running Python interpreter
+                        import sys
+                        venv_python = sys.executable
+                        
                         if selected_category == "Task A":
-                            # Run Retrieval Eval Script
-                            cmd = [
-                                venv_python, "src/evaluation/run_retrieval_eval.py",
-                                "--input_file", eval_dataset_path,
-                                "--output_file", output_path
-                            ]
-                            cwd = os.path.dirname(os.path.abspath(__file__))
-                            res = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+                            # Task A: Run retrieval evaluation
+                            st.subheader("📊 Task A Retrieval Evaluation")
                             
-                            if res.returncode == 0:
-                                st.success("Evaluation Complete!")
-                                if res.stdout:
-                                    st.subheader("📈 Metrics")
-                                    st.code(res.stdout)
+                            st.info(f"""
+                            **Evaluation Configuration:**
+                            - Corpus: **{selected_corpus.upper()}**
+                            - Query Type: **{QUERY_TYPES[selected_query_type]}**
+                            - Total Queries: **{len(beir_queries)}**
+                            - Queries with Relevance Judgments: **{len(beir_qrels)}**
+                            """)
+                            
+                            task_a_predictions_path = eval_dataset_path 
+                            
+                            if task_a_predictions_path:
+                                output_path = task_a_predictions_path.replace(".jsonl", "_results.json").replace(".json", "_results.json")
                                 
-                                # Check for Aggregate CSV
-                                agg_csv = output_path.replace("_results.json", "_results_aggregate.csv")
-                                if os.path.exists(agg_csv):
-                                    st.dataframe(pd.read_csv(agg_csv))
-                            else:
-                                st.error("Evaluation Failed")
-                                st.error(res.stderr)
+                                run_retrieval_eval_command = [
+                                    venv_python, "src/evaluation/run_retrieval_eval.py",
+                                    "--input_file", task_a_predictions_path,
+                                    "--output_file", output_path,
+                                ]
+                                
+                                with st.status("Running Retrieval Evaluation...", expanded=True) as status:
+                                    st.write("📂 Input file:", task_a_predictions_path)
+                                    st.write("📊 Running official MTRAG retrieval evaluation...")
+                                    
+                                    try:
+                                        import subprocess 
+                                        
+                                        result = subprocess.run(
+                                            run_retrieval_eval_command, 
+                                            capture_output=True, 
+                                            text=True,
+                                            cwd=os.path.dirname(os.path.abspath(__file__))
+        )
+                                        
+                                        if result.returncode == 0:
+                                            status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
+                                            
+                                            if result.stdout:
+                                                st.subheader("📈 Retrieval Metrics")
+                                                st.code(result.stdout)
+                                            
+                                            aggregate_csv = output_path.replace("_results.json", "_results_aggregate.csv")
+                                            if os.path.exists(aggregate_csv):
+                                                st.subheader("📋 Aggregate Results")
+                                                df_agg = pd.read_csv(aggregate_csv)
+                                                st.dataframe(df_agg)
+                                            
+                                            if os.path.exists(output_path):
+                                                with open(output_path, "rb") as f:
+                                                    st.download_button(
+                                                        label="📥 Download Enriched Results",
+                                                        data=f,
+                                                        file_name="retrieval_eval_results.json",
+                                                        mime="application/json"
+                                                    )
+                                        else:
+                                            status.update(label="❌ Evaluation Failed", state="error")
+                                            st.error("Evaluation script failed")
+                                            if result.stderr:
+                                                st.error(result.stderr)
+                                                
+                                    except Exception as e:
+                                        status.update(label="❌ Execution Error", state="error")
+                                        st.error(f"Failed to run subprocess: {e}")
 
+                            else:
+                                st.warning("⚠️ Please upload your retrieval predictions file above")
+
+                            eval_time = time.time() - eval_start
+                            st.caption(f"⏱️ Completed in {eval_time:.2f}s")
+                        
                         else:
-                            # Run Generation Eval Script
-                            cmd = [
+                            # Task B/C: Generation Eval
+                            output_path = eval_dataset_path.replace(".jsonl", "_results.json")
+                        
+                            run_gen_eval_command = [
                                 venv_python, "src/evaluation/run_generation_eval.py",
                                 "-i", eval_dataset_path,
                                 "-o", output_path,
@@ -787,21 +836,29 @@ def main():
                                 "--provider", "hf",
                                 "--judge_model", judge_provider
                             ]
-                            res = subprocess.run(cmd, capture_output=True, text=True)
                             
-                            if res.returncode == 0:
-                                st.success("Evaluation Complete!")
-                            else:
-                                st.error("Evaluation Failed")
-                                st.error(res.stderr)
-
-                        # Download Result
-                        if os.path.exists(output_path):
-                            with open(output_path, "rb") as f:
-                                st.download_button("📥 Download Detailed Results", f, "eval_results.json")
-                                
-                    except Exception as e:
-                        st.error(f"Error launching script: {e}")
+                            with st.status("Evaluating...", expanded=True) as status:
+                                try:
+                                    result = subprocess.run(run_gen_eval_command, capture_output=True, text=True)
+                                    
+                                    if result.returncode == 0:
+                                        status.update(label="✅ Evaluation Complete!", state="complete")
+                                        
+                                        if os.path.exists(output_path):
+                                            with open(output_path, "rb") as f:
+                                                st.download_button(
+                                                    label="📥 Download Evaluation Results",
+                                                    data=f,
+                                                    file_name="evaluation_results.json",
+                                                    mime="application/json"
+                                                )
+                                        else:
+                                            st.error("Script finished but no output file was found.")
+                                    else:
+                                        status.update(label="❌ Evaluation Failed", state="error")
+                                        st.error(result.stderr)
+                                except Exception as e:
+                                    st.error(f"Subprocess failed: {e}")
 
     # ==================== TAB: DATABASE INSPECTOR ====================
     with tab_db:
