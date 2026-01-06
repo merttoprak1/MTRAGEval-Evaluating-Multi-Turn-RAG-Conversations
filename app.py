@@ -541,157 +541,267 @@ def main():
     # ==================== TAB: BATCH EVALUATION ====================
     with tab_batch:
         st.header("📊 Batch Evaluation")
-        st.markdown("""
-        Run official MTRAG benchmark evaluation on your RAG system.
-        This uses the multi-turn conversation dataset from IBM Research.
-        """)
         
-        # MTRAG Configuration
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            mtrag_corpus = st.selectbox(
-                "Select Corpus",
-                ["clapnq", "cloud", "fiqa", "govt"],
-                help="MTRAG corpus to evaluate on"
-            )
-            
-            mtrag_task = st.selectbox(
-                "Select Task",
-                ["generation_taskb", "retrieval_taska", "rag_taskc"],
-                format_func=lambda x: {
-                    "retrieval_taska": "Task A: Retrieval Only",
-                    "generation_taskb": "Task B: Generation (with provided contexts)",
-                    "rag_taskc": "Task C: Full RAG Pipeline"
-                }.get(x, x),
-                help="MTRAG task type"
-            )
-        
-        with col2:
-            mtrag_limit = st.number_input(
-                "Number of Tasks",
-                min_value=1,
-                max_value=100,
-                value=10,
-                help="Limit number of tasks to run (for faster testing)"
-            )
-            
-            skip_eval = st.checkbox(
-                "Skip Evaluation",
-                value=False,
-                help="Skip MTRAG evaluation after generating predictions"
-            )
-        
+        # We split the tab into two modes: Official Benchmark vs. Custom File Eval
+        eval_mode = st.radio("Evaluation Mode", ["🚀 Run Official MTRAG Benchmark", "📂 Evaluate Custom Files"], horizontal=True)
         st.divider()
-        
-        # Run Benchmark Button
-        if st.button("▶️ Run MTRAG Benchmark", type="primary", key="run_mtrag_btn"):
-            if provider != "Local" and not api_key:
-                st.error("❌ Please provide API key in the sidebar for non-local providers")
-            else:
-                try:
-                    import subprocess
-                    import sys
-                    
-                    # Prepare command
-                    cmd = [
-                        sys.executable, "run_mtrag_benchmark.py",
-                        "--corpus", mtrag_corpus,
-                        "--task", mtrag_task,
-                        "--limit", str(mtrag_limit),
-                        "--provider", provider,
-                        "--model", model_name
-                    ]
-                    
-                    if provider == "Local":
-                        if base_url:
-                            cmd.extend(["--base_url", base_url])
-                    else:
-                        cmd.extend(["--api_key", api_key])
+
+        # ---------------- MODE 1: OFFICIAL BENCHMARK RUNNER ----------------
+        if eval_mode == "🚀 Run Official MTRAG Benchmark":
+            st.subheader("Official MTRAG Benchmark")
+            st.markdown("""
+            Run the standard benchmark on specific corpora using the `run_mtrag_benchmark.py` script.
+            This generates predictions which can then be evaluated.
+            """)
+            
+            # Configuration
+            col1, col2 = st.columns(2)
+            with col1:
+                mtrag_corpus = st.selectbox(
+                    "Select Corpus",
+                    ["clapnq", "cloud", "fiqa", "govt"],
+                    help="MTRAG corpus to evaluate on"
+                )
+                
+                mtrag_task = st.selectbox(
+                    "Select Task",
+                    ["generation_taskb", "retrieval_taska", "rag_taskc"],
+                    format_func=lambda x: {
+                        "retrieval_taska": "Task A: Retrieval Only",
+                        "generation_taskb": "Task B: Generation",
+                        "rag_taskc": "Task C: Full RAG Pipeline"
+                    }.get(x, x)
+                )
+            
+            with col2:
+                mtrag_limit = st.number_input("Limit Examples", 1, 1000, 10)
+                skip_eval = st.checkbox("Skip Auto-Evaluation (Generate Only)", value=False)
+            
+            if st.button("▶️ Start Benchmark Run", type="primary"):
+                if provider != "Local" and not api_key:
+                    st.error("❌ API Key required in Sidebar.")
+                else:
+                    try:
+                        import subprocess
+                        import sys
                         
-                    if skip_eval:
-                        cmd.append("--skip_eval")
+                        # Command Construction
+                        cmd = [
+                            sys.executable, "run_mtrag_benchmark.py",
+                            "--corpus", mtrag_corpus,
+                            "--task", mtrag_task,
+                            "--limit", str(mtrag_limit),
+                            "--provider", provider,
+                            "--model", model_name
+                        ]
                         
-                    # Output file path (must match what run_mtrag_benchmark.py uses)
-                    # It creates files like: results/{task}/{corpus}_predictions.jsonl
-                    # We can use the --output arg to be sure
-                    output_file = Path("results") / mtrag_task / f"{mtrag_corpus}_predictions.jsonl"
-                    cmd.extend(["--output", str(output_file)])
-                    
-                    st.info(f"Executing: {' '.join(cmd)}")
-                    
-                    with st.spinner(f"Running MTRAG benchmark on {mtrag_corpus}..."):
-                        # Run command
-                        process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            encoding='utf-8',
-                            errors='replace' # Handle encoding errors gracefully
-                        )
-                        
-                        # Real-time output container
-                        output_container = st.empty()
-                        logs = []
-                        
-                        # Read logs in real-time
-                        while True:
-                            output = process.stdout.readline()
-                            if output == '' and process.poll() is not None:
-                                break
-                            if output:
-                                line = output.strip()
-                                logs.append(line)
-                                # Show last few lines of log
-                                output_container.code("\n".join(logs[-10:]), language="bash")
-                        
-                        # Check exit code
-                        return_code = process.poll()
-                        if return_code != 0:
-                            stderr = process.stderr.read()
-                            st.error(f"Benchmark failed with code {return_code}")
-                            st.error(stderr)
+                        if provider == "Local":
+                            if base_url: cmd.extend(["--base_url", base_url])
                         else:
-                            st.success("✅ Benchmark completed successfully!")
+                            cmd.extend(["--api_key", api_key])
                             
-                            # Load and display results
-                            if output_file.exists():
-                                st.subheader("📋 Predictions")
-                                predictions = []
-                                with open(output_file, 'r', encoding='utf-8') as f:
-                                    for line in f:
-                                        predictions.append(json.loads(line))
-                                
-                                # Display table
-                                results_df = pd.DataFrame([
-                                    {
-                                        "Task ID": p.get("task_id", "")[:20] + "...",
-                                        "Conversation ID": p.get("conversation_id", ""),
-                                        "Prediction": str(p.get("predictions", ""))[:100] + "...",
-                                        "Contexts": len(p.get("contexts", []))
-                                    }
-                                    for p in predictions
-                                ])
-                                st.dataframe(results_df, use_container_width=True)
-                                
-                                # Download button
-                                with open(output_file, "r", encoding='utf-8') as f:
-                                    jsonl_content = f.read()
-                                
-                                st.download_button(
-                                    "📥 Download Predictions (JSONL)",
-                                    data=jsonl_content,
-                                    file_name=output_file.name,
-                                    mime="application/jsonl"
-                                )
+                        if skip_eval:
+                            cmd.append("--skip_eval")
+                            
+                        # Output file path logic
+                        output_file = Path("results") / mtrag_task / f"{mtrag_corpus}_predictions.jsonl"
+                        cmd.extend(["--output", str(output_file)])
+                        
+                        st.info(f"Executing: {' '.join(cmd)}")
+                        
+                        with st.spinner(f"Running benchmark on {mtrag_corpus}..."):
+                            # Run Process
+                            process = subprocess.Popen(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                encoding='utf-8',
+                                errors='replace'
+                            )
+                            
+                            # Live Log Output
+                            output_container = st.empty()
+                            logs = []
+                            while True:
+                                output = process.stdout.readline()
+                                if output == '' and process.poll() is not None:
+                                    break
+                                if output:
+                                    line = output.strip()
+                                    logs.append(line)
+                                    output_container.code("\n".join(logs[-10:]), language="bash")
+                            
+                            if process.poll() != 0:
+                                st.error(f"Failed with code {process.poll()}")
+                                st.error(process.stderr.read())
                             else:
-                                st.warning(f"Output file not found at {output_file}")
+                                st.success("✅ Benchmark Completed!")
                                 
-                except Exception as e:
-                    st.error(f"❌ Execution error: {e}")
-                    logger.error(f"Benchmark execution error: {e}", exc_info=True)
-        st.info("Copy your Evaluation Logic here from the previous version.")
+                                # Show Results
+                                if output_file.exists():
+                                    st.subheader("📋 Predictions Preview")
+                                    predictions = []
+                                    with open(output_file, 'r', encoding='utf-8') as f:
+                                        for line in f:
+                                            predictions.append(json.loads(line))
+                                    
+                                    results_df = pd.DataFrame([{
+                                        "Task ID": p.get("task_id", "")[:15],
+                                        "Prediction": str(p.get("predictions", ""))[:80] + "...",
+                                        "Contexts": len(p.get("contexts", []))
+                                    } for p in predictions])
+                                    
+                                    st.dataframe(results_df, use_container_width=True)
+                                    
+                                    with open(output_file, "r", encoding='utf-8') as f:
+                                        st.download_button("📥 Download JSONL", f, output_file.name)
+
+                    except Exception as e:
+                        st.error(f"Execution Error: {e}")
+
+        # ---------------- MODE 2: CUSTOM FILE EVALUATOR ----------------
+        else:
+            st.subheader("📂 Evaluate Custom Files")
+            st.markdown("Upload your own prediction files to calculate metrics (Recall, NDCG, RAGAS, etc).")
+            
+            col_sel1, col_sel2 = st.columns([1, 2])
+            
+            with col_sel1:
+                eval_selected_task = st.radio(
+                    "Task Type",
+                    ["A: Retrieval Only", "B: Generation", "C: Full RAG"],
+                    key="custom_eval_task_selector"
+                )
+                # Map UI selection to internal categories
+                category_map = {
+                    "A: Retrieval Only": "Task A",
+                    "B: Generation": "Task B",
+                    "C: Full RAG": "Task C"
+                }
+                selected_category = category_map[eval_selected_task]
+
+            # Dynamic Input Section
+            eval_dataset_path = None
+            beir_qrels = None
+            beir_queries = None
+            
+            with col_sel2:
+                # --- TASK A INPUTS ---
+                if selected_category == "Task A":
+                    st.info("Task A requires a **Predictions File** + **Ground Truth (BEIR)**.")
+                    
+                    # 1. Select Ground Truth Source
+                    selected_corpus = st.selectbox("Select Ground Truth Corpus (for Qrels)", AVAILABLE_CORPORA)
+                    selected_query_type = st.selectbox("Query Type", list(QUERY_TYPES.keys()), format_func=lambda x: QUERY_TYPES[x])
+                    
+                    # Load BEIR Data
+                    try:
+                        paths = get_retrieval_task_paths(selected_corpus, selected_query_type)
+                        beir_qrels = load_qrels(paths["qrels"])
+                        beir_queries = load_queries(paths["queries"])
+                        st.caption(f"Loaded: {len(beir_queries)} queries, {len(beir_qrels)} relevance sets.")
+                    except Exception as e:
+                        st.error(f"Failed to load BEIR data: {e}")
+
+                    # 2. Upload Predictions
+                    task_a_file = st.file_uploader("Upload Retrieval Predictions (.jsonl)", type=["json", "jsonl"])
+                    if task_a_file:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
+                            tmp.write(task_a_file.getvalue())
+                            eval_dataset_path = tmp.name
+                        st.success(f"Loaded {task_a_file.name}")
+
+                # --- TASK B/C INPUTS ---
+                else:
+                    st.info("Task B/C requires a **Test Dataset** (Input + Ground Truth).")
+                    eval_dataset = st.file_uploader("Upload Test Dataset (.jsonl)", type=["json", "jsonl"])
+                    if eval_dataset:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
+                            tmp.write(eval_dataset.getvalue())
+                            eval_dataset_path = tmp.name
+                        st.success(f"Loaded {eval_dataset.name}")
+                        
+                        # Judge Settings
+                        judge_provider = st.selectbox("LLM-as-a-Judge", ["ibm-granite/granite-3.3-8b-instruct", "Custom"])
+                        if judge_provider == "Custom":
+                            judge_provider = st.text_input("Custom Provider String", "ibm-granite/granite-3.3-8b-instruct")
+
+            st.divider()
+            
+            # --- RUN EVALUATION BUTTON ---
+            # Check readiness
+            is_ready = False
+            if selected_category == "Task A":
+                is_ready = (eval_dataset_path is not None and beir_qrels is not None)
+            else:
+                is_ready = (eval_dataset_path is not None)
+
+            if st.button("🚀 Run Evaluation", type="primary", disabled=not is_ready):
+                with st.spinner("Calculating metrics..."):
+                    import time
+                    start_eval = time.time()
+                    
+                    # Resolve Python Interpreter
+                    if platform.system() == "Windows":
+                        venv_python = os.path.abspath("src/evaluation/venv/Scripts/python.exe")
+                    else:
+                        venv_python = os.path.abspath("src/evaluation/venv/bin/python")
+                    
+                    # Define Output Path
+                    output_path = eval_dataset_path.replace(".jsonl", "_results.json")
+                    
+                    # Logic Branching
+                    try:
+                        if selected_category == "Task A":
+                            # Run Retrieval Eval Script
+                            cmd = [
+                                venv_python, "src/evaluation/run_retrieval_eval.py",
+                                "--input_file", eval_dataset_path,
+                                "--output_file", output_path
+                            ]
+                            cwd = os.path.dirname(os.path.abspath(__file__))
+                            res = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+                            
+                            if res.returncode == 0:
+                                st.success("Evaluation Complete!")
+                                if res.stdout:
+                                    st.subheader("📈 Metrics")
+                                    st.code(res.stdout)
+                                
+                                # Check for Aggregate CSV
+                                agg_csv = output_path.replace("_results.json", "_results_aggregate.csv")
+                                if os.path.exists(agg_csv):
+                                    st.dataframe(pd.read_csv(agg_csv))
+                            else:
+                                st.error("Evaluation Failed")
+                                st.error(res.stderr)
+
+                        else:
+                            # Run Generation Eval Script
+                            cmd = [
+                                venv_python, "src/evaluation/run_generation_eval.py",
+                                "-i", eval_dataset_path,
+                                "-o", output_path,
+                                "-e", "src/evaluation/config.yaml",
+                                "--provider", "hf",
+                                "--judge_model", judge_provider
+                            ]
+                            res = subprocess.run(cmd, capture_output=True, text=True)
+                            
+                            if res.returncode == 0:
+                                st.success("Evaluation Complete!")
+                            else:
+                                st.error("Evaluation Failed")
+                                st.error(res.stderr)
+
+                        # Download Result
+                        if os.path.exists(output_path):
+                            with open(output_path, "rb") as f:
+                                st.download_button("📥 Download Detailed Results", f, "eval_results.json")
+                                
+                    except Exception as e:
+                        st.error(f"Error launching script: {e}")
 
     # ==================== TAB: DATABASE INSPECTOR ====================
     with tab_db:
