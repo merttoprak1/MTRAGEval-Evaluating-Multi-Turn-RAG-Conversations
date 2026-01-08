@@ -13,7 +13,7 @@ from src.vector_store import setup_vector_store, get_retriever, add_to_vector_st
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
-from src.database import init_db, create_session, get_sessions, save_message, load_session_history, delete_session, rename_session
+from src.database import init_db
 from src.beir_utils import (
     AVAILABLE_CORPORA, QUERY_TYPES, get_retrieval_task_paths,
     load_qrels, load_queries, calculate_retrieval_metrics
@@ -54,73 +54,6 @@ def main():
     if 'gen_result_final_content' not in st.session_state:
         st.session_state.gen_result_final_content = None
 
-    # ==================== SIDEBAR: GLOBAL CONFIG ====================
-    st.sidebar.header("Global Configuration")
-    
-    # 1. Session Management
-    st.sidebar.subheader("Chat Sessions")
-    
-    if "current_session_id" not in st.session_state:
-        st.session_state.current_session_id = None
-
-    sessions = get_sessions()
-    session_options = {s['id']: f"{s['name']} ({s['created_at'][:16]})" for s in sessions}
-    
-    # Session Management Callbacks
-    def create_session_click():
-        new_id = create_session()
-        if new_id:
-            st.session_state.current_session_id = new_id
-            st.session_state.session_selector = new_id
-
-    def delete_session_click(sess_id):
-        delete_session(sess_id)
-        st.session_state.current_session_id = None
-        st.session_state.session_selector = "new_session"
-
-    if "session_selector" not in st.session_state:
-        st.session_state.session_selector = "new_session"
-
-    selected_session_id = st.sidebar.selectbox(
-        "Select Session", 
-        options=["new_session"] + list(session_options.keys()),
-        format_func=lambda x: "➕ New Session" if x == "new_session" else session_options.get(x, "Unknown"),
-        key="session_selector"
-    )
-    
-    if selected_session_id == "new_session":
-        st.sidebar.button("Create Session", on_click=create_session_click)
-    else:
-        st.session_state.current_session_id = selected_session_id
-        current_name = session_options.get(selected_session_id, "Unknown").split(" (")[0]
-        new_session_name = st.sidebar.text_input("Rename Session", value=current_name)
-        if st.sidebar.button("Update Name"):
-            rename_session(selected_session_id, new_session_name)
-            st.rerun()
-
-        st.sidebar.button("Delete Session", on_click=delete_session_click, args=(selected_session_id,))
-
-    st.sidebar.divider()
-    
-    # 2. LLM Provider (Global Authentication)
-    st.sidebar.subheader("LLM Provider")
-    provider = st.sidebar.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=1)
-    
-    api_key = None
-    base_url = None
-    model_name = "gpt-3.5-turbo"
-
-    if provider == "OpenAI":
-        api_key = st.sidebar.text_input("OpenAI API Key", type="password")
-        model_name = "gpt-3.5-turbo" # Default, can be overridden in Interactive Tab
-    elif provider == "Gemini":
-        api_key = st.sidebar.text_input("Google API Key", type="password")
-        model_name = "gemini-flash-latest" # Default
-    else:
-        base_url = st.sidebar.text_input("Local LLM Base URL", value="http://localhost:1234/v1")
-        model_name = "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
-        st.sidebar.info("Ensure local server is running (Ollama/LM Studio).")
-
     # ==================== MAIN TABS ====================
     # We define the Knowledge Base tab first in execution order so variables are available
     tab_interactive, tab_batch, tab_kb, tab_db = st.tabs([
@@ -135,6 +68,32 @@ def main():
     # and available for the other tabs, even though it appears 3rd in the UI list.
     with tab_kb:
         st.header("📚 Knowledge Base Management")
+
+        # LLM Provider Selection --------------------------------
+        st.subheader("0. Global LLM Provider")
+        llm_col1, llm_col2 = st.columns(2)
+        
+        with llm_col1:
+            provider = st.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=1)
+        
+        with llm_col2:
+            api_key = None
+            base_url = None
+            model_name = "gpt-3.5-turbo"
+
+            if provider == "OpenAI":
+                api_key = st.text_input("OpenAI API Key", type="password")
+                model_name = "gpt-3.5-turbo"
+            elif provider == "Gemini":
+                api_key = st.text_input("Google API Key", type="password")
+                model_name = "gemini-flash-latest"
+            else:
+                base_url = st.text_input("Local LLM Base URL", value="http://localhost:1234/v1")
+                model_name = "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
+                st.info("Ensure local server is running (Ollama/LM Studio).")
+        
+        st.divider()
+        # -----------------------------------------------------------
         
         kb_col1, kb_col2 = st.columns(2)
         
