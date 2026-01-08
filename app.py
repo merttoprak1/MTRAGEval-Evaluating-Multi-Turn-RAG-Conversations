@@ -332,7 +332,8 @@ def main():
                 st.warning("⚠️ No vector store loaded. Please go to the 'Knowledge Base' tab to ingest data.")
             
             elif uploaded_file:
-                try:
+                if st.button("▶️ Process File", type="primary"): 
+                    try:
                         import time
                         suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
                         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -345,7 +346,7 @@ def main():
                         if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                             llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
-                        # CRITICAL: Capture vector_store locally for threads
+                        # Capture vector_store locally for threads
                         vector_store_instance = st.session_state.vector_store
 
                         # --- DEFINING THE WORKER FUNCTION ---
@@ -377,18 +378,16 @@ def main():
                                         "title": doc.metadata.get("title", "No Title")
                                     })
                                 
-                                # D. Construct Output Object (Matches Task B Input Format)
+                                # D. Construct Output Object
                                 output_obj = {
-                                    "conversation_id": item.get('conversation_id'), # Added
+                                    "conversation_id": item.get('conversation_id'),
                                     "task_id": item['id'],
-                                    "task_type": item.get('task_type', 'rag'),      # Added
-                                    "turn": item.get('turn'),                       # Added
+                                    "task_type": item.get('task_type', 'rag'),
+                                    "turn": item.get('turn'),
                                     "Collection": item['collection'],
-                                    "dataset": item.get('dataset', 'unknown'),      # Added
-                                    "contexts": contexts,                           # The new data
-                                    "input": item['original_input_obj'],            # Preserved input
-                                    
-                                    # Debugging metadata (ignored by evaluator)
+                                    "dataset": item.get('dataset', 'unknown'),
+                                    "contexts": contexts,
+                                    "input": item['original_input_obj'],
                                     "rewritten_query": final_query, 
                                 }
                                 return json.dumps(output_obj)
@@ -409,14 +408,12 @@ def main():
                                 if not line.strip(): continue
                                 data = json.loads(line)
                                 
-                                # Parse MTRAG vs BEIR
                                 parsed_item = {}
                                 
-                                # CASE 1: MTRAG (Has 'input' list - Rich Metadata)
+                                # CASE 1: MTRAG
                                 if "input" in data and isinstance(data["input"], list):
                                     conv = data["input"]
                                     if not conv: continue
-                                    
                                     parsed_item = {
                                         "id": data.get("task_id", f"line_{line_idx}"),
                                         "conversation_id": data.get("conversation_id", ""),
@@ -424,16 +421,16 @@ def main():
                                         "turn": data.get("turn", line_idx),
                                         "dataset": data.get("dataset", "unknown"),
                                         "collection": data.get("Collection", collection_name),
-                                        "text": conv[-1]['text'], # Current query
-                                        "history": conv[:-1],     # History
+                                        "text": conv[-1]['text'],
+                                        "history": conv[:-1],
                                         "original_input_obj": conv
                                     }
                                 
-                                # CASE 2: BEIR (Has 'text' and '_id' - Minimal Metadata)
+                                # CASE 2: BEIR
                                 elif "text" in data and "_id" in data:
                                     parsed_item = {
                                         "id": data["_id"],
-                                        "conversation_id": data["_id"], # Fallback
+                                        "conversation_id": data["_id"],
                                         "task_type": "rag",
                                         "turn": 1,
                                         "dataset": "BEIR",
@@ -466,13 +463,11 @@ def main():
                         total_time = time.time() - start_time
                         st.success(f"✅ Retrieval complete in {total_time:.2f}s")
                         
-                        # 3. Save to Disk & Download
+                        # 3. Save & Download
                         final_jsonl = "\n".join(results_buffer)
                         
                         predictions_dir = "predictions"
                         os.makedirs(predictions_dir, exist_ok=True)
-                        
-                        # Create a timestamped filename to avoid overwriting
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
                         save_filename = f"task_a_{collection_name}_{timestamp}.jsonl"
                         save_path = os.path.join(predictions_dir, save_filename)
@@ -481,7 +476,6 @@ def main():
                             f.write(final_jsonl)
                         
                         st.success(f"✅ Predictions saved locally to: `{save_path}`")
-                        # ----------------------
 
                         st.download_button(
                             label="📥 Download Retrieval Predictions",
@@ -491,8 +485,8 @@ def main():
                         )
                         os.remove(tmp_file_path)
 
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
         # --- TASK B & C ---
         else:
