@@ -2,7 +2,6 @@ import json
 import logging
 from typing import List, Dict, Any
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -80,20 +79,6 @@ def load_json_documents(file_path: str) -> List[Document]:
     except Exception as e:
         logger.error(f"Error loading documents: {e}", exc_info=True)
         return []
-
-def chunk_documents(documents: List[Document], chunk_size: int = 512, chunk_overlap: int = 100) -> List[Document]:
-    """
-    Splits documents into smaller chunks for vector storage.
-    """
-    logger.info(f"Chunking {len(documents)} documents with size={chunk_size}, overlap={chunk_overlap}")
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
-    )
-    chunks = text_splitter.split_documents(documents)
-    logger.info(f"Generated {len(chunks)} chunks")
-    return chunks
 
 
 # ==================== BEIR Format Support ====================

@@ -9,7 +9,7 @@ import sys
 import json
 import concurrent.futures
 from pathlib import Path
-from src.ingestion import load_json_documents, chunk_documents, load_beir_queries
+from src.ingestion import load_json_documents, load_beir_queries
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
@@ -217,17 +217,16 @@ def main():
                         
                         documents = load_json_documents(tmp_file_path)
                         if documents:
-                            chunks = chunk_documents(documents)
                             if embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
                                 st.error("OpenAI API Key required for embedding.")
                             else:
                                 if api_key: os.environ["OPENAI_API_KEY"] = api_key
                                 
                                 st.session_state.vector_store = setup_vector_store(
-                                    chunks, embedding_config, collection_name, vector_db_type, db_config
+                                    documents, embedding_config, collection_name, vector_db_type, db_config
                                 )
                                 st.session_state.current_collection = collection_name
-                                st.success(f"Successfully ingested {len(chunks)} chunks into {collection_name}")
+                                st.success(f"Successfully ingested {len(documents)} documents into {collection_name}")
                         else:
                             st.error("No valid documents found.")
                         os.remove(tmp_file_path)
@@ -241,7 +240,7 @@ def main():
                 try:
                     collection_data = st.session_state.vector_store.get()
                     num_docs = len(collection_data['ids'])
-                    st.write(f"Total Chunks: {num_docs}")
+                    st.write(f"Total documents: {num_docs}")
                     
                     if num_docs > 0:
                         data_for_df = []
