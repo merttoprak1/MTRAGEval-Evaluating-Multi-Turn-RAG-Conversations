@@ -332,8 +332,7 @@ def main():
                 st.warning("⚠️ No vector store loaded. Please go to the 'Knowledge Base' tab to ingest data.")
             
             elif uploaded_file:
-                if st.button("▶️ Run Batch Retrieval", type="primary"):
-                    try:
+                try:
                         import time
                         suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
                         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -346,18 +345,11 @@ def main():
                         if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                             llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
-                        # CRITICAL FIX: Capture vector_store in a local variable for the threads
-                        # Threads cannot access st.session_state directly
+                        # CRITICAL: Capture vector_store locally for threads
                         vector_store_instance = st.session_state.vector_store
 
                         # --- DEFINING THE WORKER FUNCTION ---
                         def process_single_item(item):
-                            """
-                            Worker function to process a single query item:
-                            1. Rewrite (with history)
-                            2. Retrieve
-                            3. Format Output
-                            """
                             try:
                                 # A. Rewrite
                                 final_query = item['text']
@@ -367,35 +359,37 @@ def main():
                                         method=rw_config.get("method"),
                                         llm=llm_for_rewrite,
                                         enabled=True,
-                                        history=item['history'], # Pass extracted history
+                                        history=item['history'], 
                                         custom_prompt=rw_config.get("custom_prompt")
                                     )
                                     final_query = rewrite_result['rewritten']
 
                                 # B. Retrieve
-                                # FIX: Use the local variable 'vector_store_instance' instead of st.session_state
                                 docs_with_scores = vector_store_instance.similarity_search_with_score(final_query, k=task_a_top_k)
                                 
                                 # C. Format Contexts
                                 contexts = []
                                 for doc, score in docs_with_scores:
                                     contexts.append({
-                                        "document_id": doc.metadata.get("id", "unknown_id"), # REQUIRED
-                                        "score": float(score), # REQUIRED
-                                        "text": doc.page_content, # Optional for A, Required for B
+                                        "document_id": doc.metadata.get("id", "unknown_id"),
+                                        "score": float(score),
+                                        "text": doc.page_content,
                                         "title": doc.metadata.get("title", "No Title")
                                     })
                                 
-                                # D. Construct Output Object
+                                # D. Construct Output Object (Matches Task B Input Format)
                                 output_obj = {
+                                    "conversation_id": item.get('conversation_id'), # Added
                                     "task_id": item['id'],
+                                    "task_type": item.get('task_type', 'rag'),      # Added
+                                    "turn": item.get('turn'),                       # Added
                                     "Collection": item['collection'],
-                                    "input": item['original_input_obj'], # Pass through the original input block
-                                    "contexts": contexts,
+                                    "dataset": item.get('dataset', 'unknown'),      # Added
+                                    "contexts": contexts,                           # The new data
+                                    "input": item['original_input_obj'],            # Preserved input
                                     
                                     # Debugging metadata (ignored by evaluator)
                                     "rewritten_query": final_query, 
-                                    "original_query": item['text']
                                 }
                                 return json.dumps(output_obj)
                             
@@ -418,32 +412,38 @@ def main():
                                 # Parse MTRAG vs BEIR
                                 parsed_item = {}
                                 
-                                # CASE 1: MTRAG (Has 'input' list)
+                                # CASE 1: MTRAG (Has 'input' list - Rich Metadata)
                                 if "input" in data and isinstance(data["input"], list):
                                     conv = data["input"]
                                     if not conv: continue
                                     
                                     parsed_item = {
                                         "id": data.get("task_id", f"line_{line_idx}"),
-                                        # ADD THIS LINE:
-                                        "conversation_id": data.get("conversation_id", ""), 
+                                        "conversation_id": data.get("conversation_id", ""),
+                                        "task_type": data.get("task_type", "rag"),
+                                        "turn": data.get("turn", line_idx),
+                                        "dataset": data.get("dataset", "unknown"),
+                                        "collection": data.get("Collection", collection_name),
                                         "text": conv[-1]['text'], # Current query
                                         "history": conv[:-1],     # History
-                                        "collection": data.get("Collection", collection_name),
                                         "original_input_obj": conv
                                     }
                                 
-                                # CASE 2: BEIR (Has 'text' and '_id')
+                                # CASE 2: BEIR (Has 'text' and '_id' - Minimal Metadata)
                                 elif "text" in data and "_id" in data:
                                     parsed_item = {
                                         "id": data["_id"],
-                                        "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
-                                        "history": [], # No history
+                                        "conversation_id": data["_id"], # Fallback
+                                        "task_type": "rag",
+                                        "turn": 1,
+                                        "dataset": "BEIR",
                                         "collection": collection_name,
-                                        "original_input_obj": [{"speaker": "user", "text": data["text"]}] # Synthetic input obj
+                                        "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
+                                        "history": [], 
+                                        "original_input_obj": [{"speaker": "user", "text": data["text"]}]
                                     }
                                 else:
-                                    continue # Unknown format
+                                    continue 
                                 
                                 items_to_process.append(parsed_item)
 
@@ -452,7 +452,6 @@ def main():
                         start_time = time.time()
                         
                         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                            # Submit all tasks
                             future_to_item = {executor.submit(process_single_item, item): item for item in items_to_process}
                             
                             completed_count = 0
@@ -477,8 +476,8 @@ def main():
                         )
                         os.remove(tmp_file_path)
 
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
         # --- TASK B & C ---
         else:
