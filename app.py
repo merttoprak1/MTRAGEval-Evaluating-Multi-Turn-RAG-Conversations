@@ -482,134 +482,489 @@ def main():
 
         # --- TASK B & C ---
         else:
-            # Task C Rewrite Config
-            if selected_task == "C":
-                with st.expander("✏️ Query Rewrite Configuration", expanded=True):
-                    rewrite_enabled = st.checkbox("Enable Query Rewriting", value=True)
-                    rewrite_method = st.selectbox("Rewrite Method", ["LLM-based", "Rule-based", "Hybrid"])
-                    
-                    if rewrite_method in ["LLM-based", "Hybrid"]:
-                        prompt_type = st.radio("Prompt Type", ["Default", "Custom"], horizontal=True)
-                        custom_prompt = None
-                        if prompt_type == "Custom":
-                            custom_prompt = st.text_area("Custom Prompt", value=DEFAULT_REWRITE_PROMPT)
-                        else:
-                            st.code(DEFAULT_REWRITE_PROMPT, language=None)
-                    else:
-                        prompt_type = "N/A"
-                        custom_prompt = None
-                    
-                    st.session_state.selected_components["rewriter"] = {"enabled": rewrite_enabled, "method": rewrite_method, "custom_prompt": custom_prompt}
-            
-            # Retrieval Config (Interactive override)
-            if selected_task in ["C"]:
-                with st.expander("🔍 Retrieval Configuration", expanded=True):
-                    st.session_state.selected_components["retriever"] = {
-                        "top_k": st.slider("Top K Results", 1, 20, 5, key="interactive_top_k"),
-                        "collection": collection_name
-                    }
-            
-            # File Upload for B/C
-            uploaded_file = st.file_uploader("Upload Input File (JSONL)", type=["json", "jsonl"])
-            if uploaded_file:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
-                    tmp.write(uploaded_file.getvalue())
-                    st.session_state.test_file_path = tmp.name
+            # get reference.jsonl
+            uploaded_file = st.file_uploader("Upload input File", type=["json", "jsonl"])
 
-            # Generation Config
+            if uploaded_file:
+                try:
+                    # Save uploaded file to temp file
+                    suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_file_path = tmp_file.name
+                        st.session_state.test_file_path = tmp_file_path
+                except Exception as e:
+                    logger.error(f"Error processing file: {e}", exc_info=True)
+                    st.error(f"Error processing file: {e}")
+                            
             with st.expander("🤖 Generation Configuration", expanded=True):
+                # LLM Model Lists
+                OPENAI_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
+                GEMINI_MODELS = ["gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-pro"]
+                LOCAL_MODELS = ["QuantFactory/Meta-Llama-3-8B-Instruct-GGUF", "mistral-7b-instruct", "custom"]
+                
+                # Prompt Templates
+                PROMPT_TEMPLATES = {
+                    "Default RAG": """"You are a helpful assistant. You must answer the user's question strictly using ONLY the information provided in the 'Reference Passages' section below. Rules: 1. If the 'Reference Passages' section is empty or does not contain the answer, you must strictly output: 'I do not know'. 2. Do not use your own internal knowledge. 3. Do not make up facts.""",
+                    "Concise": """Based on the context below, provide a brief, direct answer to the question.""",
+                    "Detailed": """You are a knowledgeable assistant. Analyze the provided context thoroughly and give a comprehensive, well-structured answer to the question. Include relevant details and explanations.""",
+                    "Custom": ""
+                }
+                
                 gen_col1, gen_col2 = st.columns(2)
+                
                 with gen_col1:
-                    if provider == "OpenAI":
-                        gen_model = st.selectbox("Model", ["gpt-4o", "gpt-3.5-turbo"], key="gen_model")
-                    elif provider == "Gemini":
-                        gen_model = st.selectbox("Model", ["gemini-2.0-flash-exp", "gemini-1.5-pro"], key="gen_model")
-                    else:
-                        gen_model = st.text_input("Model Name", value=model_name, key="gen_model")
+                    # LLM Provider is already selected in sidebar, show model selector
+                    st.markdown(f"**LLM Provider:** {provider}")
                     
-                    temperature = st.slider("Temperature", 0.0, 2.0, 0.1)
-                    max_tokens = st.slider("Max Tokens", 100, 4096, 1024)
+                    if provider == "OpenAI":
+                        gen_model = st.selectbox("Model", OPENAI_MODELS, key="gen_model_openai")
+                    elif provider == "Gemini":
+                        gen_model = st.selectbox("Model", GEMINI_MODELS, key="gen_model_gemini")
+                    else:
+                        gen_model = st.selectbox("Model", LOCAL_MODELS, key="gen_model_local")
+                        if gen_model == "custom":
+                            gen_model = st.text_input("Custom Model Name", value=model_name)
+                    
+                    temperature = st.slider("Temperature", 0.0, 2.0, 0.1, 0.1)
+                    max_tokens = st.slider("Max Tokens", 100, 4096, 1024, 100)
                 
                 with gen_col2:
-                    prompt_template = st.text_area("Prompt Template", value="Answer based on context: {context}\n\nQuestion: {question}")
+                    # Prompt Template Selection
+                    prompt_template_name = st.selectbox(
+                        "Prompt Template",
+                        list(PROMPT_TEMPLATES.keys()),
+                        help="Select a pre-defined prompt template or create custom"
+                    )
+                    
+                    if prompt_template_name == "Custom":
+                        gen_prompt_template = st.text_area(
+                            "Custom Prompt Template",
+                            value=PROMPT_TEMPLATES["Default RAG"],
+                            height=200,
+                            help="Use {context} and {question} placeholders"
+                        )
+                    else:
+                        gen_prompt_template = PROMPT_TEMPLATES[prompt_template_name]
+                        with st.expander("📄 View Prompt Template"):
+                            st.code(gen_prompt_template, language=None)
                 
                 st.session_state.selected_components["generator"] = {
-                    "temperature": temperature, 
-                    "max_tokens": max_tokens, 
-                    "provider": provider, 
-                    "model": gen_model, 
-                    "prompt_template": prompt_template
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "provider": provider,
+                    "model": gen_model,
+                    "prompt_template_name": prompt_template_name,
+                    "prompt_template": gen_prompt_template
                 }
+        
+            st.divider()
 
             if st.button("▶️ Run Pipeline", type="primary"):
                 if selected_task == "C" and st.session_state.vector_store is None:
                     st.error("❌ No vector store loaded. Please go to 'Knowledge Base'.")
                 else:
-                    # ... [Run Logic for B/C - same as before, simplified for brevity] ...
-                    # Reusing the logic from your previous snippet
+                    progress_container = st.empty()
+                    status_container = st.empty()
+                    
                     try:
                         import time
                         from datetime import datetime
-                        progress_bar = st.progress(0)
-                        task_b_output = []
                         
-                        if st.session_state.get("test_file_path"):
-                            with open(st.session_state.get("test_file_path"), 'r', encoding='utf-8') as f:
-                                lines = f.readlines()
-                                for idx, line in enumerate(lines):
-                                    if not line.strip(): continue
-                                    data = json.loads(line)
+                        start_time = time.time()
+                        
+                        # Capture config snapshot
+                        config_snapshot = {
+                            "timestamp": datetime.now().isoformat(),
+                            "task": selected_task,
+                            # "query": test_query,
+                            "llm_provider": provider,
+                            "llm_model": model_name,
+                            "embedding_provider": embedding_provider,
+                            "embedding_model": embedding_config.get("model_name", "default"),
+                            "vector_db": vector_db_type,
+                            "collection": collection_name,
+                            "top_k": retrieval_top_k,
+                            "components": st.session_state.selected_components
+                        }
+                        
+                        run_result = {
+                            "task": selected_task,
+                            # "query": test_query,
+                            "config_snapshot": config_snapshot,
+                            "components": st.session_state.selected_components,
+                            "status": "running",
+                            "errors": []
+                        }
+                        
+                        # Progress tracking
+                        total_steps = 1  # Retrieval# 
+                        if selected_task == "C":
+                            total_steps += 1  # Rewrite
+                        if selected_task in ["B", "C"]:
+                            total_steps += 1  # Generation
+                        
+                        current_step = 0
+                        
+                        # Determine the query to use for retrieval
+                        # retrieval_query = test_query 
+                        
+                        # Task C: Execute Query Rewrite first
+                        if selected_task == "C":
+                            rewriter_config = st.session_state.selected_components.get("rewriter", {})
+                            rewrite_enabled = rewriter_config.get("enabled", True)
+                            rewrite_method = rewriter_config.get("method", "LLM-based")
+                            custom_prompt = rewriter_config.get("custom_prompt", None)
+                            
+                            # Get LLM for rewriting if needed
+                            rewrite_llm = None
+                            if rewrite_method in ["LLM-based", "Hybrid"]:
+                                try:
+                                    rewrite_llm = get_llm(provider, api_key, base_url, model_name)
+                                except Exception as e:
+                                    st.warning(f"Could not initialize LLM for rewriting: {e}")
+                            
+                            # Execute rewrite
+                            rewrite_result = rewrite_query(
+                                # query=test_query,
+                                method=rewrite_method,
+                                llm=rewrite_llm,
+                                enabled=rewrite_enabled,
+                                custom_prompt=custom_prompt
+                            )
+                            run_result["rewrite_result"] = rewrite_result
+                            retrieval_query = rewrite_result["rewritten"]
+                            
+                            # Display rewrite results
+                            st.subheader("✏️ Query Rewrite Result")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.markdown("**Original Query:**")
+                                st.info(rewrite_result["original"])
+                            with col2:
+                                st.markdown("**Rewritten Query:**")
+                                if rewrite_enabled:
+                                    st.success(rewrite_result["rewritten"])
+                                else:
+                                    st.warning(f"{rewrite_result['rewritten']} (rewrite disabled)")
+                            
+                            st.caption(f"Method: {rewrite_result['method']} | Enabled: {rewrite_result['enabled']}")
+                        
+                        # ==================== TASK C: RETRIEVAL ====================
+                        if selected_task in ["C"]:
+                            retriever_config = st.session_state.selected_components.get("retriever", {})
+                            top_k = retriever_config.get("top_k", 5)
+                            search_type = retriever_config.get("search_type", "similarity")
+                            
+                            st.subheader("🔍 Retrieval Results")
+                            
+                            try:
+                                # Execute retrieval with scores
+                                retrieval_start = time.time()
+                                
+                                # Use similarity_search_with_score to get scores
+                                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(
+                                    retrieval_query, 
+                                    k=top_k
+                                )
+                                retrieval_time = time.time() - retrieval_start
+                                
+                                # Prepare results for storage
+                                retrieval_results = []
+                                for doc, score in docs_with_scores:
+                                    retrieval_results.append({
+                                        "content": doc.page_content[:500],  # Truncate for storage
+                                        "score": float(score),
+                                        "metadata": doc.metadata
+                                    })
+                                
+                                run_result["retrieval"] = {
+                                    "query_used": retrieval_query,
+                                    "top_k": top_k,
+                                    "search_type": search_type,
+                                    "num_results": len(docs_with_scores),
+                                    "retrieval_time_ms": round(retrieval_time * 1000, 2),
+                                    "results": retrieval_results
+                                }
+                                
+                                # Store retrieved docs for potential generation use
+                                run_result["retrieved_docs"] = [doc for doc, _ in docs_with_scores]
+                                
+                                # Display retrieval stats
+                                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                                with stat_col1:
+                                    st.metric("📄 Results", len(docs_with_scores))
+                                with stat_col2:
+                                    st.metric("⏱️ Time", f"{round(retrieval_time * 1000, 2)} ms")
+                                with stat_col3:
+                                    st.metric("🎯 Top-K", top_k)
+                                with stat_col4:
+                                    if docs_with_scores:
+                                        avg_score = sum(s for _, s in docs_with_scores) / len(docs_with_scores)
+                                        st.metric("📊 Avg Score", f"{avg_score:.4f}")
+                                
+                                # Display retrieved documents with scores
+                                if docs_with_scores:
+                                    st.markdown("---")
+                                    st.markdown("### 📋 Retrieved Chunks")
                                     
-                                    # Logic Extraction
-                                    conversation_turns = data.get('input', [])
-                                    if not conversation_turns: continue
-                                    current_query = conversation_turns[-1]['text']
+                                    for i, (doc, score) in enumerate(docs_with_scores):
+                                        # Create a card-like container for each result
+                                        with st.container():
+                                            # Header row with rank, score, and source
+                                            header_col1, header_col2, header_col3 = st.columns([1, 2, 3])
+                                            
+                                            with header_col1:
+                                                st.markdown(f"### #{i+1}")
+                                            
+                                            with header_col2:
+                                                # Score with progress bar visualization
+                                                # Note: Lower score = better match for some DBs (distance), higher = better for others (similarity)
+                                                st.markdown(f"**Score:** `{score:.4f}`")
+                                                # Normalize score for progress bar (assuming similarity, higher is better)
+                                                normalized = min(1.0, max(0.0, 1 - score if score > 1 else score))
+                                                st.progress(normalized)
+                                            
+                                            with header_col3:
+                                                # Source metadata summary
+                                                source = doc.metadata.get('source', doc.metadata.get('title', 'Unknown'))
+                                                doc_id = doc.metadata.get('id', 'N/A')
+                                                st.markdown(f"**Source:** {source}")
+                                                st.caption(f"ID: {doc_id}")
+                                        
+                                        # Chunk text in expander
+                                        with st.expander(f"📄 View Chunk Text ({len(doc.page_content)} chars)", expanded=(i==0)):
+                                            # Chunk content
+                                            st.markdown("**Chunk Text:**")
+                                            st.code(doc.page_content, language=None)
+                                            
+                                            # Full metadata
+                                            st.markdown("**Source Metadata:**")
+                                            meta_cols = st.columns(2)
+                                            with meta_cols[0]:
+                                                for key in ['id', 'source', 'title', 'chunk_id']:
+                                                    if key in doc.metadata:
+                                                        st.write(f"• **{key}:** {doc.metadata[key]}")
+                                            with meta_cols[1]:
+                                                for key in doc.metadata:
+                                                    if key not in ['id', 'source', 'title', 'chunk_id']:
+                                                        st.write(f"• **{key}:** {doc.metadata[key]}")
+                                            
+                                            # Raw JSON
+                                            with st.expander("📋 Raw Metadata JSON"):
+                                                st.json(doc.metadata)
+                                        
+                                        st.markdown("---")
+                                else:
+                                    st.warning("No documents retrieved. Try adjusting your query or Top-K value.")
                                     
-                                    # 1. Rewrite
-                                    retrieval_query = current_query
-                                    if selected_task == "C":
-                                        rw_config = st.session_state.selected_components.get("rewriter", {})
-                                        if rw_config.get("enabled"):
-                                            # Call rewrite logic here (simplified)
-                                            retrieval_query = current_query # Placeholder for actual call
-                                    
-                                    # 2. Retrieve
-                                    retrieved_docs = []
-                                    if selected_task == "C":
-                                        docs = st.session_state.vector_store.similarity_search_with_score(retrieval_query, k=5)
-                                        for d, s in docs:
-                                            retrieved_docs.append({"title": d.metadata.get('title'), "text": d.page_content, "score": float(s)})
-                                    else:
-                                        retrieved_docs = data.get('contexts', [])
-                                    
-                                    # 3. Generate
+                            except Exception as e:
+                                st.error(f"❌ Retrieval failed: {e}")
+                                logger.error(f"Retrieval error: {e}", exc_info=True)
+                                run_result["retrieval"] = {"error": str(e)}
+
+                        # ==================== TASK B ====================
+                        if selected_task in ["B"]:
+                            st.subheader("🤖 Generation")
+                            
+                            # Check if we have retrieved docs
+                            retrieved_docs = run_result.get("retrieved_docs", [])
+                            # TODO: fix if not retrieved_docs
+                            if retrieved_docs:
+                                st.warning("⚠️ No retrieved documents to use as context. Skipping generation.")
+                            else:
+                                try:
                                     gen_config = st.session_state.selected_components.get("generator", {})
-                                    # Construct prompt...
-                                    # Call LLM...
-                                    prediction = "Simulated Answer" # Replace with actual LLM call using get_llm
+                                    gen_model = gen_config.get("model", model_name)
+                                    gen_temperature = gen_config.get("temperature", 0.1)
+                                    gen_max_tokens = gen_config.get("max_tokens", 1024)
+                                    prompt_template = gen_config.get("prompt_template", "")
+                                    prompt_template_name = gen_config.get("prompt_template_name", "Default RAG")
                                     
-                                    # For real implementation, paste your LLM call block here
-                                    # Keeping it short to fit response limit
-                                    llm = get_llm(provider, api_key, base_url, gen_config['model'])
-                                    msg = [HumanMessage(content=f"Context: {retrieved_docs} Q: {current_query}")]
-                                    try:
-                                        res = llm.invoke(msg)
-                                        prediction = res.content
-                                    except: prediction = "Error"
+                                    task_b_output = []
+                                    
+                                    # Initialize LLM
+                                    gen_start = time.time()
+                                    llm = get_llm(provider, api_key, base_url, gen_model)
+                                    
+                                    with open(st.session_state.get("test_file_path", ""), 'r', encoding='utf-8') as f:
+                                        for line_number, line in enumerate(f):
+                                            if not line.strip():
+                                                continue
+                                            
+                                            # 1. Parse the JSON line
+                                            data = json.loads(line)
+                                            retrieved_docs = data.get('contexts', [])
+                                            context_parts = []
+                                            for i, doc in enumerate(retrieved_docs):
+                                                title = doc.get('title', 'Unknown Title')
+                                                text = doc.get('text', '')
+                                                context_parts.append(f"Document [{i+1}] (Title: {title}):\n{text}")
+                                            
+                                            full_context_str = "\n\n".join(context_parts)
+                                            
+                                            # 'input' contains the conversation history
+                                            # The structure is a list of dictionaries with "speaker" and "text"
+                                            conversation_turns = data.get('input', [])
+                                            
+                                            if not conversation_turns:
+                                                continue
 
-                                    data["predictions"] = [{"text": prediction}]
-                                    if selected_task == "C": data["contexts"] = retrieved_docs
-                                    task_b_output.append(json.dumps(data))
-                                    progress_bar.progress((idx + 1) / len(lines))
-                        
-                        st.session_state.gen_result_final_content = "\n".join(task_b_output)
+                                            # The last item in 'input' is the current user query
+                                            last_turn = conversation_turns[-1]
+                                            current_query = last_turn['text']
+
+                                            # Everything before the last item is history
+                                            history_turns = conversation_turns[:-1]
+                                            # --- BUILD PROMPT ---
+                    
+                                            system_instruction = prompt_template
+                                            # Create the message list for the LLM
+                                            # 1. System instruction with the Documents (Context)
+                                            messages = [
+                                                SystemMessage(content=f"{system_instruction}\n\n### REFERENCE PASSAGES:\n{full_context_str}")
+                                            ]
+                                            
+                                            # 2. Add Conversation History (Crucial for Multi-Turn understanding)
+                                            for turn in history_turns:
+                                                speaker = turn.get('speaker')
+                                                text = turn.get('text')
+                                                if speaker == 'user':
+                                                    messages.append(HumanMessage(content=text))
+                                                elif speaker == 'agent':
+                                                    messages.append(AIMessage(content=text))
+                                            
+                                            # 3. Add the final User Query
+                                            messages.append(HumanMessage(content=current_query))
+                                            
+                                            # --- GENERATE RESPONSE ---
+                                            
+                                            # invoke the LLM
+                                            # Note: Ensure your 'llm' object is initialized before running this
+                                            try:
+                                                ai_response = llm.invoke(messages, temperature=gen_temperature)
+                                                prediction = ai_response.content
+
+                                            except Exception as e:
+                                                prediction = "Error generating response."
+                                            
+                                            # Generate response
+                                            # response = llm.invoke([HumanMessage(content=formatted_prompt)])
+                                            gen_time = time.time() - gen_start
+                                            
+                                            # Extract answer
+                                            # answer = response.content if hasattr(response, 'content') else str(response)
+                                            # print("\nanswer: ", answer)
+                                            # Store generation result
+                                            run_result["generation"] = {
+                                                "model": gen_model,
+                                                "provider": provider,
+                                                "temperature": gen_temperature,
+                                                "max_tokens": gen_max_tokens,
+                                                "prompt_template_name": prompt_template_name,
+                                                "context_length": len(full_context_str),
+                                                "num_context_docs": len(retrieved_docs),
+                                                "answer": prediction,
+                                                "generation_time_ms": round(gen_time * 1000, 2)
+                                            }
+                                            
+                                            data["predictions"] = [
+                                                {
+                                                    "text": prediction
+                                                }
+                                            ]
+                                            task_b_output.append(json.dumps(data, ensure_ascii=False))
+                                                
+                                except Exception as e:
+                                    st.error(f"❌ Generation failed: {e}")
+                                    logger.error(f"Generation error: {e}", exc_info=True)
+                                    run_result["generation"] = {"error": str(e)}
+
+                        final_jsonl_content = "\n".join(task_b_output)
                         st.session_state.gen_result_file_ready = True
-                        st.success("Pipeline Completed!")
+                        st.session_state.gen_result_final_content = final_jsonl_content
+                        
+                        # Calculate total time
+                        total_time = time.time() - start_time
+                        run_result["total_time_ms"] = round(total_time * 1000, 2)
+                        
+                        # ==================== TASK C: FULL PIPELINE SUMMARY ====================
+                        if selected_task == "C":
+                            st.markdown("---")
+                            st.subheader("📊 Full RAG Pipeline Summary (Task C)")
+                            
+                            # Pipeline visualization
+                            st.markdown("""
+                            ```
+                            ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+                            │   REWRITE   │ → │  RETRIEVAL  │ → │ GENERATION  │
+                            └─────────────┘    └─────────────┘    └─────────────┘
+                            ```
+                            """)
+                            
+                            # Summary cards
+                            summary_col1, summary_col2, summary_col3 = st.columns(3)
+                            
+                            with summary_col1:
+                                st.markdown("#### ✏️ Rewrite Stage")
+                                rewrite_data = run_result.get("rewrite_result", {})
+                                st.write(f"**Method:** {rewrite_data.get('method', 'N/A')}")
+                                st.write(f"**Enabled:** {'✅' if rewrite_data.get('enabled') else '❌'}")
+                                st.write(f"**Query Changed:** {'✅' if rewrite_data.get('original') != rewrite_data.get('rewritten') else '❌'}")
+                            
+                            with summary_col2:
+                                st.markdown("#### 🔍 Retrieval Stage")
+                                retrieval_data = run_result.get("retrieval", {})
+                                st.write(f"**Docs Retrieved:** {retrieval_data.get('num_results', 0)}")
+                                st.write(f"**Time:** {retrieval_data.get('retrieval_time_ms', 0)} ms")
+                                st.write(f"**Top-K:** {retrieval_data.get('top_k', 0)}")
+                            
+                            with summary_col3:
+                                st.markdown("#### 🤖 Generation Stage")
+                                gen_data = run_result.get("generation", {})
+                                st.write(f"**Model:** {gen_data.get('model', 'N/A')[:15]}...")
+                                st.write(f"**Time:** {gen_data.get('generation_time_ms', 0)} ms")
+                                st.write(f"**Answer Length:** {len(gen_data.get('answer', ''))} chars")
+                            
+                            # Intermediate outputs expander
+                            with st.expander("📋 All Intermediate Outputs", expanded=False):
+                                st.markdown("#### 1️⃣ Rewritten Query")
+                                rewrite_data = run_result.get("rewrite_result", {})
+                                st.code(rewrite_data.get("rewritten", test_query), language=None)
+                                
+                                st.markdown("---")
+                                st.markdown("#### 2️⃣ Retrieved Documents")
+                                retrieval_data = run_result.get("retrieval", {})
+                                results = retrieval_data.get("results", [])
+                                for i, res in enumerate(results[:3]):  # Show first 3
+                                    st.markdown(f"**[{i+1}] Score: {res.get('score', 0):.4f}**")
+                                    st.text(res.get("content", "")[:200] + "...")
+                                if len(results) > 3:
+                                    st.caption(f"... and {len(results) - 3} more documents")
+                                
+                                st.markdown("---")
+                                st.markdown("#### 3️⃣ Final Answer")
+                                gen_data = run_result.get("generation", {})
+                                st.markdown(gen_data.get("answer", "No answer generated"))
+                        
+                        # Update status
+                        run_result["status"] = "completed"
+                        st.session_state.run_result = run_result
+                        st.success(f"✅ Pipeline executed for Task {selected_task} in {round(total_time * 1000, 2)} ms!")
+                    
                     except Exception as e:
-                        st.error(f"Pipeline Failed: {e}")
-
+                        st.error(f"❌ Pipeline execution failed: {str(e)}")
+                        logger.error(f"Pipeline error: {e}", exc_info=True)
+                        with st.expander("🐛 Error Details"):
+                            import traceback
+                            st.code(traceback.format_exc(), language="python")
             if st.session_state.gen_result_file_ready:
-                st.download_button("📥 Download Predictions", st.session_state.gen_result_final_content, "predictions.jsonl")
+                st.download_button(
+                                label="📥 Download Task B Predictions",
+                                data=st.session_state.gen_result_final_content,
+                                file_name="predictions.jsonl",
+                                mime="application/jsonl"
+                            )
 
     # ==================== TAB: BATCH EVALUATION ====================
     with tab_batch:
@@ -857,9 +1212,7 @@ def main():
                                             run_retrieval_eval_command, 
                                             capture_output=True, 
                                             text=True,
-                                            cwd=os.path.dirname(os.path.abspath(__file__))
-        )
-                                        
+                                            cwd=os.path.dirname(os.path.abspath(__file__)))                                
                                         if result.returncode == 0:
                                             status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
                                             
@@ -948,7 +1301,7 @@ def main():
         # Read and display logs (last 500 lines)
         log_file_path = 'app.log'
         if os.path.exists(log_file_path):
-            with open(log_file_path, "r", encoding="utf-8") as f:
+            with open(log_file_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 # Show newest at the bottom, but limit total lines to avoid UI lag
                 last_lines = lines[-500:] 
