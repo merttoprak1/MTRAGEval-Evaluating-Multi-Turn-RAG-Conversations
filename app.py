@@ -466,12 +466,27 @@ def main():
                         total_time = time.time() - start_time
                         st.success(f"✅ Retrieval complete in {total_time:.2f}s")
                         
-                        # 3. Download
+                        # 3. Save to Disk & Download
                         final_jsonl = "\n".join(results_buffer)
+                        
+                        predictions_dir = "predictions"
+                        os.makedirs(predictions_dir, exist_ok=True)
+                        
+                        # Create a timestamped filename to avoid overwriting
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        save_filename = f"task_a_{collection_name}_{timestamp}.jsonl"
+                        save_path = os.path.join(predictions_dir, save_filename)
+                        
+                        with open(save_path, "w", encoding="utf-8") as f:
+                            f.write(final_jsonl)
+                        
+                        st.success(f"✅ Predictions saved locally to: `{save_path}`")
+                        # ----------------------
+
                         st.download_button(
                             label="📥 Download Retrieval Predictions",
                             data=final_jsonl,
-                            file_name=f"predictions_{collection_name}.jsonl",
+                            file_name=save_filename,
                             mime="application/jsonl"
                         )
                         os.remove(tmp_file_path)
