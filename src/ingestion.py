@@ -81,7 +81,7 @@ def load_json_documents(file_path: str) -> List[Document]:
         logger.error(f"Error loading documents: {e}", exc_info=True)
         return []
 
-def chunk_documents(documents: List[Document], chunk_size: int = 1000, chunk_overlap: int = 200) -> List[Document]:
+def chunk_documents(documents: List[Document], chunk_size: int = 512, chunk_overlap: int = 100) -> List[Document]:
     """
     Splits documents into smaller chunks for vector storage.
     """
