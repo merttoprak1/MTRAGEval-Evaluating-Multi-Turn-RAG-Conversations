@@ -5,3 +5,8 @@
 __pycache__/
 faiss_db_*/
 .env
+corpora/*.jsonl
+corpora/*.zip
+human/generation_tasks/*.jsonl
+venv
+.DS_Store

@@ -48,8 +48,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # MTRAG Benchmark paths (relative to this script)
-MTRAG_ROOT = Path(__file__).parent.parent
-CORPORA_DIR = MTRAG_ROOT / "corpora" / "passage_level"  # Use passage_level corpus
+MTRAG_ROOT = Path(__file__).resolve().parent
+CORPORA_DIR = MTRAG_ROOT / "corpora"
 HUMAN_DIR = MTRAG_ROOT / "human"
 RETRIEVAL_TASKS_DIR = HUMAN_DIR / "retrieval_tasks"
 GENERATION_TASKS_DIR = HUMAN_DIR / "generation_tasks"

@@ -20,7 +20,7 @@ class LocalOllamaEmbeddings(Embeddings):
         self.model = model
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        batch_size = 32
+        batch_size = 1024
         embeddings = []
         total_texts = len(texts)
         
