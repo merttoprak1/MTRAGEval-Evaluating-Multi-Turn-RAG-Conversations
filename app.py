@@ -7,13 +7,13 @@ import platform
 import logging
 import sys
 import json
+import concurrent.futures
 from pathlib import Path
 from src.ingestion import load_json_documents, chunk_documents, load_beir_queries
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
-from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT
-from src.database import init_db
+from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_REWRITE_PROMPT
 from src.beir_utils import (
     AVAILABLE_CORPORA, QUERY_TYPES, get_retrieval_task_paths,
     load_qrels, load_queries, calculate_retrieval_metrics
@@ -37,9 +37,6 @@ st.set_page_config(page_title="Modular RAG Chatbot", layout="wide")
 def main():
     st.title("🤖 Modular RAG Chatbot")
     logger.info("Application started")
-    
-    # Initialize DB
-    init_db()
 
     # --- Global State Management ---
     if "selected_task" not in st.session_state:
@@ -54,13 +51,12 @@ def main():
     if 'gen_result_final_content' not in st.session_state:
         st.session_state.gen_result_final_content = None
 
-    # ==================== MAIN TABS ====================
-    # We define the Knowledge Base tab first in execution order so variables are available
-    tab_interactive, tab_batch, tab_kb, tab_db = st.tabs([
+    ## ==================== MAIN TABS ====================
+    tab_interactive, tab_batch, tab_kb, tab_logs = st.tabs([
         "💬 Interactive Playground", 
         "📊 Batch Evaluation",
         "📚 Knowledge Base", 
-        "🔍 Database Inspector"
+        "📝 Logs & Debugging"  # Changed from Database Inspector
     ])
 
     # ==================== TAB: KNOWLEDGE BASE (Consolidated) ====================
@@ -298,8 +294,38 @@ def main():
         # --- TASK A: BATCH RETRIEVAL ---
         elif selected_task == "A":
             st.subheader("📂 Batch Retrieval (Task A)")
-            st.markdown("Upload a JSONL file containing queries. The app will retrieve the most relevant passages for each query.")
+            st.markdown("Upload a Query File. Supports **BEIR format** (e.g., `clapnq_lastturn.jsonl`) or **Task A/C Input format** (e.g., `retrieval_taskac_input.jsonl`).")
             
+            # --- Task A Configuration Columns ---
+            conf_col1, conf_col2 = st.columns([1, 1])
+            
+            with conf_col1:
+                # Threading Configuration
+                max_workers = st.slider("Concurrent Worker Threads", min_value=1, max_value=16, value=4, help="Increase this for higher throughput if your LLM/Server can handle parallel requests.")
+
+            with conf_col2:
+                 # Retrieval Settings Override
+                 task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=retrieval_top_k)
+
+            # --- Query Rewrite Configuration ---
+            with st.expander("✏️ Query Rewrite Configuration", expanded=True):
+                rewrite_enabled = st.checkbox("Enable Query Rewriting", value=True, key="rw_enable_a")
+                rewrite_method = st.selectbox("Rewrite Method", ["LLM-based", "Rule-based", "Hybrid"], key="rw_method_a")
+                
+                custom_prompt = None
+                if rewrite_method in ["LLM-based", "Hybrid"]:
+                    prompt_type = st.radio("Prompt Type", ["Default/Contextual", "Custom"], horizontal=True, key="rw_prompt_type_a")
+                    if prompt_type == "Custom":
+                        custom_prompt = st.text_area("Custom Prompt", value=CONTEXTUAL_REWRITE_PROMPT, key="rw_custom_prompt_a")
+                    else:
+                        st.caption("ℹ️ Uses 'Contextual Prompt' if history exists, otherwise 'Default Prompt'.")
+                
+                st.session_state.selected_components["rewriter_a"] = {
+                    "enabled": rewrite_enabled, 
+                    "method": rewrite_method, 
+                    "custom_prompt": custom_prompt
+                }
+
             uploaded_file = st.file_uploader("Upload Query File (JSONL)", type=["json", "jsonl"], key="task_a_uploader")
             
             if st.session_state.vector_store is None:
@@ -314,55 +340,141 @@ def main():
                             tmp_file.write(uploaded_file.getvalue())
                             tmp_file_path = tmp_file.name
 
-                        with st.spinner("Loading queries..."):
-                            queries = load_beir_queries(tmp_file_path)
-                            st.info(f"Loaded {len(queries)} queries.")
-                        
-                        if queries:
-                            progress_bar = st.progress(0)
-                            results_buffer = []
-                            start_time = time.time()
-                            
-                            # Use retrieval settings from KB tab if configured, or defaults
-                            top_k = retrieval_top_k 
-                            
-                            st.write(f"Running retrieval for {len(queries)} queries (Top-K: {top_k})...")
-                            
-                            for i, (q_id, q_text) in enumerate(queries.items()):
-                                docs_with_scores = st.session_state.vector_store.similarity_search_with_score(q_text, k=top_k)
+                        # Prepare Resources
+                        rw_config = st.session_state.selected_components.get("rewriter_a", {})
+                        llm_for_rewrite = None
+                        if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
+                            llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
+
+                        # CRITICAL FIX: Capture vector_store in a local variable for the threads
+                        # Threads cannot access st.session_state directly
+                        vector_store_instance = st.session_state.vector_store
+
+                        # --- DEFINING THE WORKER FUNCTION ---
+                        def process_single_item(item):
+                            """
+                            Worker function to process a single query item:
+                            1. Rewrite (with history)
+                            2. Retrieve
+                            3. Format Output
+                            """
+                            try:
+                                # A. Rewrite
+                                final_query = item['text']
+                                if rw_config.get("enabled"):
+                                    rewrite_result = rewrite_query(
+                                        query=item['text'],
+                                        method=rw_config.get("method"),
+                                        llm=llm_for_rewrite,
+                                        enabled=True,
+                                        history=item['history'], # Pass extracted history
+                                        custom_prompt=rw_config.get("custom_prompt")
+                                    )
+                                    final_query = rewrite_result['rewritten']
+
+                                # B. Retrieve
+                                # FIX: Use the local variable 'vector_store_instance' instead of st.session_state
+                                docs_with_scores = vector_store_instance.similarity_search_with_score(final_query, k=task_a_top_k)
                                 
+                                # C. Format Contexts
                                 contexts = []
                                 for doc, score in docs_with_scores:
                                     contexts.append({
-                                        "document_id": doc.metadata.get("id", "unknown_id"),
-                                        "score": float(score),
-                                        "title": doc.metadata.get("title", "No Title"),
-                                        "text": doc.page_content 
+                                        "document_id": doc.metadata.get("id", "unknown_id"), # REQUIRED
+                                        "score": float(score), # REQUIRED
+                                        "text": doc.page_content, # Optional for A, Required for B
+                                        "title": doc.metadata.get("title", "No Title")
                                     })
                                 
-                                # Sort by score descending
-                                contexts.sort(key=lambda x: x['score'], reverse=True)
-                                
-                                result_obj = {
-                                    "task_id": q_id,
-                                    "query": q_text,
-                                    "Collection": collection_name,
-                                    "contexts": contexts
+                                # D. Construct Output Object
+                                output_obj = {
+                                    "task_id": item['id'],
+                                    "Collection": item['collection'],
+                                    "input": item['original_input_obj'], # Pass through the original input block
+                                    "contexts": contexts,
+                                    
+                                    # Debugging metadata (ignored by evaluator)
+                                    "rewritten_query": final_query, 
+                                    "original_query": item['text']
                                 }
-                                results_buffer.append(json.dumps(result_obj))
-                                progress_bar.progress((i + 1) / len(queries))
+                                return json.dumps(output_obj)
                             
-                            total_time = time.time() - start_time
-                            st.success(f"✅ Retrieval complete in {total_time:.2f}s")
+                            except Exception as e:
+                                logger.error(f"Error processing {item.get('id', 'unknown')}: {e}")
+                                return None
+
+                        # --- MAIN PROCESSING LOOP ---
+                        st.write(f"Processing with {max_workers} threads...")
+                        progress_bar = st.progress(0)
+                        
+                        items_to_process = []
+                        
+                        # 1. Parse File
+                        with open(tmp_file_path, 'r', encoding='utf-8') as f:
+                            for line_idx, line in enumerate(f):
+                                if not line.strip(): continue
+                                data = json.loads(line)
+                                
+                                # Parse MTRAG vs BEIR
+                                parsed_item = {}
+                                
+                                # CASE 1: MTRAG (Has 'input' list)
+                                if "input" in data and isinstance(data["input"], list):
+                                    conv = data["input"]
+                                    if not conv: continue
+                                    
+                                    parsed_item = {
+                                        "id": data.get("task_id", f"line_{line_idx}"),
+                                        "text": conv[-1]['text'], # Current query
+                                        "history": conv[:-1],     # History
+                                        "collection": data.get("Collection", collection_name),
+                                        "original_input_obj": conv
+                                    }
+                                
+                                # CASE 2: BEIR (Has 'text' and '_id')
+                                elif "text" in data and "_id" in data:
+                                    parsed_item = {
+                                        "id": data["_id"],
+                                        "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
+                                        "history": [], # No history
+                                        "collection": collection_name,
+                                        "original_input_obj": [{"speaker": "user", "text": data["text"]}] # Synthetic input obj
+                                    }
+                                else:
+                                    continue # Unknown format
+                                
+                                items_to_process.append(parsed_item)
+
+                        # 2. Parallel Execution
+                        results_buffer = []
+                        start_time = time.time()
+                        
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                            # Submit all tasks
+                            future_to_item = {executor.submit(process_single_item, item): item for item in items_to_process}
                             
-                            final_jsonl = "\n".join(results_buffer)
-                            st.download_button(
-                                label="📥 Download Retrieval Predictions",
-                                data=final_jsonl,
-                                file_name=f"predictions_{collection_name}.jsonl",
-                                mime="application/jsonl"
-                            )
-                            os.remove(tmp_file_path)
+                            completed_count = 0
+                            for future in concurrent.futures.as_completed(future_to_item):
+                                result = future.result()
+                                if result:
+                                    results_buffer.append(result)
+                                
+                                completed_count += 1
+                                progress_bar.progress(completed_count / len(items_to_process))
+
+                        total_time = time.time() - start_time
+                        st.success(f"✅ Retrieval complete in {total_time:.2f}s")
+                        
+                        # 3. Download
+                        final_jsonl = "\n".join(results_buffer)
+                        st.download_button(
+                            label="📥 Download Retrieval Predictions",
+                            data=final_jsonl,
+                            file_name=f"predictions_{collection_name}.jsonl",
+                            mime="application/jsonl"
+                        )
+                        os.remove(tmp_file_path)
+
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -819,41 +931,30 @@ def main():
                                 except Exception as e:
                                     st.error(f"Subprocess failed: {e}")
 
-    # ==================== TAB: DATABASE INSPECTOR ====================
-    with tab_db:
-        st.header("Database Inspector")
-        st.subheader("Sessions Table")
-        try:
-            sessions = get_sessions()
-            if sessions:
-                st.dataframe(sessions)
-            else:
-                st.info("No sessions found.")
-        except Exception as e:
-            st.error(f"Error loading sessions: {e}")
-
-        st.divider()
-
-        st.subheader("Messages Table")
-        # We need a way to get all messages or filter by session
-        # Let's add a simple query to get all messages for inspection
-        try:
-            import sqlite3
-            conn = sqlite3.connect("chat_history.db")
-            # import pandas as pd # Removed redundant import
-            df_messages = pd.read_sql_query("SELECT * FROM messages ORDER BY timestamp DESC", conn)
-            conn.close()
-            
-            if not df_messages.empty:
-                st.dataframe(df_messages)
-            else:
-                st.info("No messages found.")
-        except Exception as e:
-            st.error(f"Error loading messages: {e}")
-        try:
-            sessions = get_sessions()
-            if sessions: st.dataframe(sessions)
-        except: pass
+    # ==================== TAB: LOGS & DEBUGGING ====================
+    with tab_logs:
+        st.header("📝 Application Logs")
+        
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            if st.button("🔄 Refresh Logs"):
+                st.rerun()
+            if st.button("🗑️ Clear Logs"):
+                open('app.log', 'w').close()
+                st.rerun()
+        
+        # Read and display logs (last 500 lines)
+        log_file_path = 'app.log'
+        if os.path.exists(log_file_path):
+            with open(log_file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                # Show newest at the bottom, but limit total lines to avoid UI lag
+                last_lines = lines[-500:] 
+                log_content = "".join(last_lines)
+                
+                st.text_area("Log Output", log_content, height=600, key="log_viewer")
+        else:
+            st.info("No log file found yet.")
 
 if __name__ == "__main__":
     main()
