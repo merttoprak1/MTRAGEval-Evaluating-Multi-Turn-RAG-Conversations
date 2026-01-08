@@ -425,6 +425,8 @@ def main():
                                     
                                     parsed_item = {
                                         "id": data.get("task_id", f"line_{line_idx}"),
+                                        # ADD THIS LINE:
+                                        "conversation_id": data.get("conversation_id", ""), 
                                         "text": conv[-1]['text'], # Current query
                                         "history": conv[:-1],     # History
                                         "collection": data.get("Collection", collection_name),
