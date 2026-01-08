@@ -30,7 +30,7 @@ except ImportError:
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from src.ingestion import load_beir_corpus, chunk_documents
+from src.ingestion import load_beir_corpus
 from src.vector_store import setup_vector_store, get_retriever
 from src.llm_client import get_llm
 from src.rag import convert_mtrag_history_to_messages, create_rag_chain_with_history, run_rag_with_mtrag_input
@@ -380,9 +380,8 @@ def main():
         documents = load_beir_corpus(str(corpus_path))
         
         logger.info(f"Chunking {len(documents)} documents...")
-        chunks = chunk_documents(documents)
         
-        logger.info(f"Setting up vector store with {len(chunks)} chunks...")
+        logger.info(f"Setting up vector store with {len(documents)} documents...")
         
         # Configure embedding based on provider
         if args.embedding_provider == "Local":
@@ -405,7 +404,7 @@ def main():
             }
         
         vector_store = setup_vector_store(
-            chunks,
+            documents,
             embedding_config=embedding_config,
             collection_name=f"mtrag_{args.corpus}",
             db_type="FAISS"
