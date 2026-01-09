@@ -66,7 +66,6 @@ def main():
         st.header("📚 Knowledge Base Management")
 
         # --- DEFINING THE PATH ---
-        # Explicitly pointing to the vectordb subfolder relative to app.py
         VECTOR_DB_DIR = Path("vectordb")
         if not VECTOR_DB_DIR.exists():
             try:
@@ -105,26 +104,21 @@ def main():
         # -----------------------------------------------------------
         st.subheader("1. Select Knowledge Base Source")
         
-        # Scan for existing FAISS indexes inside the vectordb folder
         existing_dbs = []
         if VECTOR_DB_DIR.exists():
-            # Filter for folders that look like faiss indexes (contain index.faiss)
-            # You can relax this check if using Chroma/Pinecone, but this is safe for FAISS
             existing_dbs = [f.name for f in VECTOR_DB_DIR.iterdir() if f.is_dir() and (f / "index.faiss").exists()]
 
         kb_selection_options = ["Create New / Custom"] + existing_dbs
         selected_kb_folder = st.selectbox("Load Existing Vector Store", kb_selection_options, index=0)
 
         # Variables for auto-filling
-        # Default name if creating new
         kb_name_val = "my_knowledge_base"
+        folder_name_override = None # Vital for loading existing DBs exactly as they are named
         
         if selected_kb_folder != "Create New / Custom":
-            # If selecting an existing folder, use that folder name as the KB name
-            # We strip 'faiss_db_' prefix if it exists just for cleaner display, 
-            # or keep it if you prefer the raw folder name.
-            # Here we assume the folder name IS the ID.
+            # Heuristic to clean up the display name, but we save the REAL folder name for loading
             kb_name_val = selected_kb_folder.replace("faiss_db_", "")
+            folder_name_override = selected_kb_folder
             st.success(f"📂 Loaded Configuration from: {selected_kb_folder}")
 
         st.divider()
@@ -138,7 +132,6 @@ def main():
             st.subheader("2. Embedding Configuration")
             embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local (Ollama)"], index=2)
             
-            # Model Definitions
             OPENAI_EMBEDDING_MODELS = {
                 "text-embedding-3-small": {"dim": 1536, "description": "Fastest"},
                 "text-embedding-3-large": {"dim": 3072, "description": "Best quality"},
@@ -192,37 +185,31 @@ def main():
             kb_name = st.text_input(
                 "Knowledge Base Name", 
                 value=kb_name_val, 
-                help="This name will be used for the folder name and internal collection ID."
+                help="Used for folder name and internal collection ID."
             )
 
-            # Pass the path and the name to the config
+            # Pass the path and explicitly valid folder name to the config
             db_config = {
                 "top_k": retrieval_top_k, 
                 "persist_directory": str(VECTOR_DB_DIR),
-                "index_name": kb_name  # Use the same name for index
+                "index_name": kb_name,  # Fallback for naming
+                "folder_name": folder_name_override # Explicit load target
             }
             
             if vector_db_type == "Pinecone":
                 pinecone_api_key = st.text_input("Pinecone API Key", type="password")
                 if pinecone_api_key:
                     db_config["api_key"] = pinecone_api_key
-            
-            # In Chroma, index_name functions as collection name usually
-            # In FAISS, it functions as the file/folder name suffix
 
         st.divider()
         
         # --- Vector Store Initialization Logic ---
         if "vector_store" not in st.session_state:
             st.session_state.vector_store = None
-        if "current_db_type" not in st.session_state:
-            st.session_state.current_db_type = None
-        if "current_embedding_model" not in st.session_state:
-            st.session_state.current_embedding_model = None
         
         current_embed_model = embedding_config.get("model_name", "default")
         
-        # Reload check
+        # Reload check: If KB name matches OR if we have a specific folder selected that isn't loaded yet
         should_reload = (
             st.session_state.vector_store is None or 
             st.session_state.get("current_collection") != kb_name or
@@ -235,7 +222,7 @@ def main():
                  st.session_state.vector_store = setup_vector_store(
                      documents=None, 
                      embedding_config=embedding_config, 
-                     collection_name=kb_name, # Unified name
+                     collection_name=kb_name, 
                      db_type=vector_db_type,
                      db_config=db_config
                  )
@@ -243,7 +230,7 @@ def main():
                  st.session_state.current_db_type = vector_db_type
                  st.session_state.current_embedding_model = current_embed_model
              except Exception as e:
-                 # Silent fail if empty, wait for ingestion
+                 # Silent fail if empty (expected for new DBs)
                  pass 
 
         # --- Ingestion Section ---
@@ -270,7 +257,8 @@ def main():
                                 else:
                                     if api_key: os.environ["OPENAI_API_KEY"] = api_key
                                     
-                                    # Pass unified kb_name as collection_name
+                                    # NOTE: if folder_name_override is set, we ingest INTO that folder. 
+                                    # If user wants a NEW folder, they must select "Create New" in dropdown.
                                     st.session_state.vector_store = setup_vector_store(
                                         chunks, embedding_config, kb_name, vector_db_type, db_config
                                     )
@@ -308,11 +296,16 @@ def main():
                         if st.button("Delete Selected"):
                             ids_to_delete = edited_df[edited_df.Select]["ID"].tolist()
                             if ids_to_delete:
-                                # Reconstruct the full path to pass to the delete function
-                                folder_name = f"faiss_db_{kb_name}_{kb_name}" # Consistent with _setup_faiss logic
-                                full_save_path = os.path.join(str(VECTOR_DB_DIR), folder_name)
+                                # Construct full path for deletion save
+                                if folder_name_override:
+                                    # If we loaded an existing folder, save back to it
+                                    save_dir = os.path.join(str(VECTOR_DB_DIR), folder_name_override)
+                                else:
+                                    # Reconstruct the unified name format
+                                    folder_name = f"faiss_db_{kb_name}_{kb_name}"
+                                    save_dir = os.path.join(str(VECTOR_DB_DIR), folder_name)
                                 
-                                delete_from_vector_store(st.session_state.vector_store, ids_to_delete, full_save_path)
+                                delete_from_vector_store(st.session_state.vector_store, ids_to_delete, save_dir)
                                 st.success(f"Deleted {len(ids_to_delete)} chunks.")
                                 st.rerun()
                 except Exception as e:
@@ -358,7 +351,9 @@ def main():
 
             with conf_col2:
                  # Retrieval Settings Override
-                 task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=retrieval_top_k)
+                 # Use global top_k as default
+                 default_k = st.session_state.vector_store.as_retriever().search_kwargs.get('k', 5) if st.session_state.vector_store else 5
+                 task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=default_k)
 
             # --- Query Rewrite Configuration ---
             with st.expander("✏️ Query Rewrite Configuration", expanded=True):
@@ -382,7 +377,7 @@ def main():
             uploaded_file = st.file_uploader("Upload Query File (JSONL)", type=["json", "jsonl"], key="task_a_uploader")
             
             if st.session_state.vector_store is None:
-                st.warning("⚠️ No vector store loaded. Please go to the 'Knowledge Base' tab to ingest data.")
+                st.warning("⚠️ No vector store loaded. Please go to the 'Knowledge Base' tab to ingest or select data.")
             
             elif uploaded_file:
                 if st.button("▶️ Process File", type="primary"): 
@@ -396,11 +391,20 @@ def main():
                         # Prepare Resources
                         rw_config = st.session_state.selected_components.get("rewriter_a", {})
                         llm_for_rewrite = None
+                        
+                        # Re-instantiate LLM for threads if needed
+                        # Note: 'provider', 'api_key' are from the main scope. 
+                        # To be safe, we fetch them from session state or assume main scope access.
+                        # It is safer to re-read from sidebar widgets if they are in scope, 
+                        # but inside a function/thread we need copies.
                         if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                             llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
                         # Capture vector_store locally for threads
                         vector_store_instance = st.session_state.vector_store
+                        
+                        # FIXED: Get collection name safely
+                        active_collection = st.session_state.get("current_collection", "unknown_collection")
 
                         # --- DEFINING THE WORKER FUNCTION ---
                         def process_single_item(item):
@@ -437,7 +441,8 @@ def main():
                                     "task_id": item['id'],
                                     "task_type": item.get('task_type', 'rag'),
                                     "turn": item.get('turn'),
-                                    "Collection": item['collection'],
+                                    # FIXED: Use active_collection instead of undefined variable
+                                    "Collection": item.get('collection', active_collection),
                                     "dataset": item.get('dataset', 'unknown'),
                                     "contexts": contexts,
                                     "input": item['original_input_obj'],
@@ -473,7 +478,7 @@ def main():
                                         "task_type": data.get("task_type", "rag"),
                                         "turn": data.get("turn", line_idx),
                                         "dataset": data.get("dataset", "unknown"),
-                                        "collection": data.get("Collection", collection_name),
+                                        "collection": data.get("Collection", active_collection), # FIXED
                                         "text": conv[-1]['text'],
                                         "history": conv[:-1],
                                         "original_input_obj": conv
@@ -487,7 +492,7 @@ def main():
                                         "task_type": "rag",
                                         "turn": 1,
                                         "dataset": "BEIR",
-                                        "collection": collection_name,
+                                        "collection": active_collection, # FIXED
                                         "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
                                         "history": [], 
                                         "original_input_obj": [{"speaker": "user", "text": data["text"]}]
@@ -522,7 +527,7 @@ def main():
                         predictions_dir = "predictions"
                         os.makedirs(predictions_dir, exist_ok=True)
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        save_filename = f"task_a_{collection_name}_{timestamp}.jsonl"
+                        save_filename = f"task_a_{active_collection}_{timestamp}.jsonl"
                         save_path = os.path.join(predictions_dir, save_filename)
                         
                         with open(save_path, "w", encoding="utf-8") as f:

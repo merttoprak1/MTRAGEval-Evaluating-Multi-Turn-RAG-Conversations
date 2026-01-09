@@ -55,11 +55,13 @@ def _setup_faiss(documents: List[Document], embedding_model, collection_name: st
     # 1. Determine Base Directory
     base_dir = db_config.get("persist_directory", ".") if db_config else "."
     
-    # 2. Determine Index Name & Folder Name
-    index_name = db_config.get("index_name", "default") if db_config else "default"
+    # 2. Determine Folder Name
+    # Priority: Explicit override > Constructed name
+    folder_name = db_config.get("folder_name") if db_config else None
     
-    # Construct folder name: faiss_db_{collection}_{index}
-    folder_name = f"faiss_db_{collection_name}_{index_name}"
+    if not folder_name:
+        index_name = db_config.get("index_name", "default") if db_config else "default"
+        folder_name = f"faiss_db_{collection_name}_{index_name}"
     
     # 3. Create Full Path
     persist_directory = os.path.join(base_dir, folder_name)
@@ -100,7 +102,7 @@ def _setup_faiss(documents: List[Document], embedding_model, collection_name: st
             if is_gemini and (i + batch_size < total_docs):
                 time.sleep(delay)
         
-        # Final save to the specific path
+        # Final save
         vector_store.save_local(persist_directory)
         logger.info("FAISS ingestion complete")
         
@@ -118,12 +120,16 @@ def _setup_chroma(documents: List[Document], embedding_model, collection_name: s
         raise ImportError("Chroma is not installed. Run: pip install chromadb langchain-chroma")
     
     base_dir = db_config.get("persist_directory", ".") if db_config else "."
-    index_name = db_config.get("index_name", "default") if db_config else "default"
     
-    folder_name = f"chroma_db_{collection_name}_{index_name}"
+    # Priority: Explicit override > Constructed name
+    folder_name = db_config.get("folder_name") if db_config else None
+    
+    if not folder_name:
+        index_name = db_config.get("index_name", "default") if db_config else "default"
+        folder_name = f"chroma_db_{collection_name}_{index_name}"
+    
     persist_directory = os.path.join(base_dir, folder_name)
-    
-    chroma_collection_name = f"{collection_name}_{index_name}"
+    chroma_collection_name = f"{collection_name}" # simplified naming for collection inside DB
     
     if documents:
         logger.info(f"Ingesting {len(documents)} documents into Chroma at {persist_directory}")
