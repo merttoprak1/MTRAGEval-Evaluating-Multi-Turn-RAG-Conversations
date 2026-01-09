@@ -59,23 +59,34 @@ def main():
         "📝 Logs & Debugging"  # Changed from Database Inspector
     ])
 
-    # ==================== TAB: KNOWLEDGE BASE (Consolidated) ====================
+    # ==================== TAB: KNOWLEDGE BASE =============================
     # NOTE: We execute this block first so 'collection_name', 'vector_store', etc. are defined 
     # and available for the other tabs, even though it appears 3rd in the UI list.
     with tab_kb:
         st.header("📚 Knowledge Base Management")
 
-        # LLM Provider Selection --------------------------------
+        # --- DEFINING THE PATH ---
+        # Explicitly pointing to the vectordb subfolder relative to app.py
+        VECTOR_DB_DIR = Path("vectordb")
+        if not VECTOR_DB_DIR.exists():
+            try:
+                VECTOR_DB_DIR.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Could not create directory {VECTOR_DB_DIR}: {e}")
+
+        # -----------------------------------------------------------
+        # 0. Global LLM Provider
+        # -----------------------------------------------------------
         st.subheader("0. Global LLM Provider")
         llm_col1, llm_col2 = st.columns(2)
         
         with llm_col1:
-            provider = st.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=1)
+            provider = st.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=2)
         
         with llm_col2:
             api_key = None
             base_url = None
-            model_name = "gpt-3.5-turbo"
+            model_name = "qwen2.5:3b"
 
             if provider == "OpenAI":
                 api_key = st.text_input("OpenAI API Key", type="password")
@@ -85,27 +96,55 @@ def main():
                 model_name = "gemini-flash-latest"
             else:
                 base_url = st.text_input("Local LLM Base URL", value="http://localhost:1234/v1")
-                model_name = "QuantFactory/Meta-Llama-3-8B-Instruct-GGUF"
-                st.info("Ensure local server is running (Ollama/LM Studio).")
+                model_name = st.text_input("Local Model Name", value="qwen2.5:3b")
         
         st.divider()
+
         # -----------------------------------------------------------
+        # 1. Select Knowledge Base Source (Existing Files)
+        # -----------------------------------------------------------
+        st.subheader("1. Select Knowledge Base Source")
         
+        # Scan for existing FAISS indexes inside the vectordb folder
+        existing_dbs = []
+        if VECTOR_DB_DIR.exists():
+            # Filter for folders that look like faiss indexes (contain index.faiss)
+            # You can relax this check if using Chroma/Pinecone, but this is safe for FAISS
+            existing_dbs = [f.name for f in VECTOR_DB_DIR.iterdir() if f.is_dir() and (f / "index.faiss").exists()]
+
+        kb_selection_options = ["Create New / Custom"] + existing_dbs
+        selected_kb_folder = st.selectbox("Load Existing Vector Store", kb_selection_options, index=0)
+
+        # Variables for auto-filling
+        # Default name if creating new
+        kb_name_val = "my_knowledge_base"
+        
+        if selected_kb_folder != "Create New / Custom":
+            # If selecting an existing folder, use that folder name as the KB name
+            # We strip 'faiss_db_' prefix if it exists just for cleaner display, 
+            # or keep it if you prefer the raw folder name.
+            # Here we assume the folder name IS the ID.
+            kb_name_val = selected_kb_folder.replace("faiss_db_", "")
+            st.success(f"📂 Loaded Configuration from: {selected_kb_folder}")
+
+        st.divider()
+
+        # -----------------------------------------------------------
+        # 2. Embedding & DB Configuration
+        # -----------------------------------------------------------
         kb_col1, kb_col2 = st.columns(2)
         
         with kb_col1:
-            st.subheader("1. Embedding Configuration")
-            embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local (Ollama)"], index=1)
+            st.subheader("2. Embedding Configuration")
+            embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local (Ollama)"], index=2)
             
-            # Model lists
+            # Model Definitions
             OPENAI_EMBEDDING_MODELS = {
                 "text-embedding-3-small": {"dim": 1536, "description": "Fastest"},
                 "text-embedding-3-large": {"dim": 3072, "description": "Best quality"},
-                "text-embedding-ada-002": {"dim": 1536, "description": "Legacy"},
             }
             GEMINI_EMBEDDING_MODELS = {
                 "models/text-embedding-004": {"dim": 768, "description": "Latest"},
-                "models/embedding-001": {"dim": 768, "description": "Legacy"},
             }
             LOCAL_EMBEDDING_MODELS = {
                 "nomic-embed-text": {"dim": 768, "description": "General purpose"},
@@ -119,7 +158,6 @@ def main():
                 embedding_api_key = api_key if (provider == "OpenAI" and api_key) else st.text_input("OpenAI Embedding API Key", type="password")
                 selected_model = st.selectbox("Embedding Model", list(OPENAI_EMBEDDING_MODELS.keys()))
                 model_info = OPENAI_EMBEDDING_MODELS[selected_model]
-                st.caption(f"Dim: {model_info['dim']}")
                 batch_size = st.number_input("Batch Size", 1, 2048, 100)
                 embedding_config = {"provider": "OpenAI", "api_key": embedding_api_key, "model_name": selected_model, "dimension": model_info['dim'], "batch_size": batch_size}
                 
@@ -127,44 +165,50 @@ def main():
                 embedding_api_key = api_key if (provider == "Gemini" and api_key) else st.text_input("Gemini Embedding API Key", type="password")
                 selected_model = st.selectbox("Embedding Model", list(GEMINI_EMBEDDING_MODELS.keys()))
                 model_info = GEMINI_EMBEDDING_MODELS[selected_model]
-                st.caption(f"Dim: {model_info['dim']}")
                 batch_size = st.number_input("Batch Size", 1, 100, 10)
                 embedding_config = {"provider": "Gemini", "api_key": embedding_api_key, "model_name": selected_model, "dimension": model_info['dim'], "batch_size": batch_size}
                 
             else: # Local
                 embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434")
-                selected_model = st.selectbox("Embedding Model", list(LOCAL_EMBEDDING_MODELS.keys()))
+                selected_model = st.selectbox("Embedding Model", list(LOCAL_EMBEDDING_MODELS.keys()), index=0)
+                
                 if selected_model == "custom":
                     embed_model = st.text_input("Custom Model Name")
                     model_dim = st.number_input("Dimension", 64, 4096, 768)
                 else:
                     embed_model = selected_model
                     model_dim = LOCAL_EMBEDDING_MODELS[selected_model]['dim']
+                
                 batch_size = st.number_input("Batch Size", 1, 500, 50)
                 embedding_config = {"provider": "Local", "base_url": embed_base_url, "model_name": embed_model, "dimension": model_dim, "batch_size": batch_size}
 
         with kb_col2:
-            st.subheader("2. Vector Database & Collection")
+            st.subheader("3. Vector Database settings")
             vector_db_type = st.selectbox("Vector DB Type", ["FAISS", "Chroma", "Pinecone"], index=0)
             
-            # Common config
             retrieval_top_k = st.slider("Default Top-K", 1, 20, 5)
-            db_config = {"top_k": retrieval_top_k}
             
-            if vector_db_type == "FAISS":
-                faiss_index_name = st.text_input("Index Name", value="default")
-                db_config["index_name"] = faiss_index_name
-            elif vector_db_type == "Chroma":
-                chroma_index_name = st.text_input("Collection Name", value="default", key="chroma_collection")
-                db_config["index_name"] = chroma_index_name
-            elif vector_db_type == "Pinecone":
+            # UNIFIED NAME INPUT
+            kb_name = st.text_input(
+                "Knowledge Base Name", 
+                value=kb_name_val, 
+                help="This name will be used for the folder name and internal collection ID."
+            )
+
+            # Pass the path and the name to the config
+            db_config = {
+                "top_k": retrieval_top_k, 
+                "persist_directory": str(VECTOR_DB_DIR),
+                "index_name": kb_name  # Use the same name for index
+            }
+            
+            if vector_db_type == "Pinecone":
                 pinecone_api_key = st.text_input("Pinecone API Key", type="password")
-                pinecone_index = st.text_input("Index Name", value="default-index")
                 if pinecone_api_key:
                     db_config["api_key"] = pinecone_api_key
-                    db_config["index_name"] = pinecone_index
             
-            collection_name = st.text_input("Internal Collection ID", value="default_collection", help="Unique ID for this dataset")
+            # In Chroma, index_name functions as collection name usually
+            # In FAISS, it functions as the file/folder name suffix
 
         st.divider()
         
@@ -181,26 +225,26 @@ def main():
         # Reload check
         should_reload = (
             st.session_state.vector_store is None or 
-            st.session_state.get("current_collection") != collection_name or
+            st.session_state.get("current_collection") != kb_name or
             st.session_state.get("current_db_type") != vector_db_type or
             st.session_state.get("current_embedding_model") != current_embed_model
         )
         
-        if should_reload:
+        if should_reload and kb_name:
              try:
                  st.session_state.vector_store = setup_vector_store(
                      documents=None, 
                      embedding_config=embedding_config, 
-                     collection_name=collection_name,
+                     collection_name=kb_name, # Unified name
                      db_type=vector_db_type,
                      db_config=db_config
                  )
-                 st.session_state.current_collection = collection_name
+                 st.session_state.current_collection = kb_name
                  st.session_state.current_db_type = vector_db_type
                  st.session_state.current_embedding_model = current_embed_model
-                 # logger.info(f"Vector store loaded: {collection_name}")
              except Exception as e:
-                 pass # Silent fail if empty, wait for ingestion
+                 # Silent fail if empty, wait for ingestion
+                 pass 
 
         # --- Ingestion Section ---
         st.subheader("3. Data Ingestion")
@@ -208,39 +252,44 @@ def main():
 
         if uploaded_file:
             if st.button("Process & Ingest File"):
-                with st.spinner("Processing..."):
-                    try:
-                        suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                            tmp_file.write(uploaded_file.getvalue())
-                            tmp_file_path = tmp_file.name
-                        
-                        documents = load_json_documents(tmp_file_path)
-                        if documents:
-                            chunks = chunk_documents(documents)
-                            if embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
-                                st.error("OpenAI API Key required for embedding.")
+                if not kb_name:
+                    st.error("Please provide a Knowledge Base Name first.")
+                else:
+                    with st.spinner("Processing..."):
+                        try:
+                            suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                                tmp_file.write(uploaded_file.getvalue())
+                                tmp_file_path = tmp_file.name
+                            
+                            documents = load_json_documents(tmp_file_path)
+                            if documents:
+                                chunks = chunk_documents(documents)
+                                if embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
+                                    st.error("OpenAI API Key required for embedding.")
+                                else:
+                                    if api_key: os.environ["OPENAI_API_KEY"] = api_key
+                                    
+                                    # Pass unified kb_name as collection_name
+                                    st.session_state.vector_store = setup_vector_store(
+                                        chunks, embedding_config, kb_name, vector_db_type, db_config
+                                    )
+                                    st.session_state.current_collection = kb_name
+                                    st.success(f"Successfully ingested {len(chunks)} chunks into '{kb_name}'")
                             else:
-                                if api_key: os.environ["OPENAI_API_KEY"] = api_key
-                                
-                                st.session_state.vector_store = setup_vector_store(
-                                    chunks, embedding_config, collection_name, vector_db_type, db_config
-                                )
-                                st.session_state.current_collection = collection_name
-                                st.success(f"Successfully ingested {len(chunks)} chunks into {collection_name}")
-                        else:
-                            st.error("No valid documents found.")
-                        os.remove(tmp_file_path)
-                    except Exception as e:
-                        st.error(f"Ingestion failed: {e}")
+                                st.error("No valid documents found.")
+                            os.remove(tmp_file_path)
+                        except Exception as e:
+                            st.error(f"Ingestion failed: {e}")
 
-        # --- Management Section (Merged from old tab) ---
+        # --- Management Section ---
         st.divider()
         with st.expander("🛠️ Inspect & Manage Collection"):
             if st.session_state.vector_store:
                 try:
                     collection_data = st.session_state.vector_store.get()
                     num_docs = len(collection_data['ids'])
+                    st.write(f"Active Knowledge Base: **{kb_name}**")
                     st.write(f"Total Chunks: {num_docs}")
                     
                     if num_docs > 0:
@@ -259,7 +308,11 @@ def main():
                         if st.button("Delete Selected"):
                             ids_to_delete = edited_df[edited_df.Select]["ID"].tolist()
                             if ids_to_delete:
-                                delete_from_vector_store(st.session_state.vector_store, ids_to_delete)
+                                # Reconstruct the full path to pass to the delete function
+                                folder_name = f"faiss_db_{kb_name}_{kb_name}" # Consistent with _setup_faiss logic
+                                full_save_path = os.path.join(str(VECTOR_DB_DIR), folder_name)
+                                
+                                delete_from_vector_store(st.session_state.vector_store, ids_to_delete, full_save_path)
                                 st.success(f"Deleted {len(ids_to_delete)} chunks.")
                                 st.rerun()
                 except Exception as e:
