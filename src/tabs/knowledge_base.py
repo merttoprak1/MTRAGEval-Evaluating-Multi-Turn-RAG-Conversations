@@ -54,7 +54,7 @@ def render():
 
     with kb_col2:
         st.subheader("2. Embedding Configuration")
-        embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2)
+        embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2, key="kb_embedding_provide")
         embedding_model_default = collection_infos["embedding"]["model_name"] if "model_name" in collection_infos["embedding"] else None
         # Model lists
         OPENAI_EMBEDDING_MODELS = {
@@ -92,7 +92,7 @@ def render():
             st.caption(f"Dim: {model_info['dim']}")
             embedding_model_config = {"provider": embedding_provider, "api_key": embedding_api_key, "model_name": embedding_model_default, "dimension": model_info['dim']}
         else:
-            embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434")
+            embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434", key="kb_embed_base_url")
             if db_existence is "Old DB":
                 st.text_input(
                     "Embedding Model",
