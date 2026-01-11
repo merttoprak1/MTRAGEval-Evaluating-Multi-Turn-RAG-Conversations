@@ -11,3 +11,8 @@ human/generation_tasks/*.jsonl
 venv
 .DS_Store
 .venv
+collections
+*.jsonl
+*.json
+*.zip
+.vscode
