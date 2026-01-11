@@ -17,7 +17,7 @@ def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name
         return ChatOpenAI(
             api_key=api_key,
             model=model_name,
-            temperature=0
+            temperature=0.1
         )
     
     elif provider == "Gemini":
@@ -26,7 +26,7 @@ def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name
         return ChatGoogleGenerativeAI(
             google_api_key=api_key,
             model=model_name,
-            temperature=0
+            temperature=0.1
         )
 
     elif provider == "Local":
@@ -38,7 +38,7 @@ def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name
             base_url=base_url,
             api_key=api_key if api_key else "not-needed", # Some local servers might need a dummy key
             model=model_name,
-            temperature=0
+            temperature=0.1
         )
     
     else:
