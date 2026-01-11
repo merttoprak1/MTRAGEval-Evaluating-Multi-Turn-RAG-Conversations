@@ -16,8 +16,8 @@ from typing import Dict, List, Any, Optional
 logger = logging.getLogger(__name__)
 
 # MTRAG scripts directory (relative to MTRAGEval project root)
-MTRAG_BENCHMARK_DIR = Path(__file__).parent.parent.parent.parent
-MTRAG_SCRIPTS_DIR = MTRAG_BENCHMARK_DIR / "scripts" / "evaluation"
+# MTRAG scripts directory (relative to this file)
+MTRAG_SCRIPTS_DIR = Path(__file__).parent / "evaluation"
 
 
 def get_mtrag_scripts_path() -> Path:

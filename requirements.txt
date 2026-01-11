@@ -5,7 +5,7 @@ langchain-openai
 langchain-google-genai
 langchain-core
 faiss-cpu
-# pytrec_eval
+pytrec_eval_terrier
 python-dotenv
 tqdm
 httpx
