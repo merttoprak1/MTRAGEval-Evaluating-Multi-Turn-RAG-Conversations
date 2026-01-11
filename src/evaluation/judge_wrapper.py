@@ -5,6 +5,7 @@ import os
 from datasets import Dataset 
 from ragas import evaluate, RunConfig
 from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+from lmstudio_client import LMStudioClient
 from judge_utils import *
 
 from langchain.chat_models import AzureChatOpenAI
@@ -24,6 +25,7 @@ from ragas.llms import LangchainLLMWrapper
 from ragas.run_config import RunConfig
 from langchain.llms.base import LLM
 import warnings
+
 warnings.filterwarnings('ignore')
 
 import torch
@@ -49,7 +51,7 @@ class LocalLLM(LLM):
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
-        self.model = AutoModelForCausalLM.from_pretrained(mode_name_or_path,attn_implementation="flash_attention_2", device_map="auto",  torch_dtype="bfloat16", 
+        self.model = AutoModelForCausalLM.from_pretrained(mode_name_or_path, device_map="auto",  torch_dtype="bfloat16", 
                                                             load_in_4bit=True,
                                                             bnb_4bit_compute_dtype=torch.bfloat16,
                                                           )
@@ -81,6 +83,30 @@ class LocalLLM(LLM):
     @property
     def _llm_type(self):
         return "chat"
+    
+# ================================================
+# Local LLM class for running RAGAS on LM Studio
+# ================================================
+class LMStudioLangChainAdapter(LLM):
+    client: Any = None
+    
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> str:
+        # We map the LangChain '_call' to your client's 'generate_response'
+        return self.client.generate_response(prompt)
+
+    @property
+    def _llm_type(self) -> str:
+        return "lm_studio_client"
 
 # ================================================
 # Get IDK conditioning score
@@ -226,6 +252,58 @@ def run_ragas_judges_openai(input_file, output_file, openai_key, azure_host):
     model_predictions.to_json(output_file, orient="records", lines=True)
     
 # ================================================
+# Compute RAGAS w/ LMSTUDIO
+# ================================================
+def run_ragas_judges_lmstudio(input_file, output_file, model_name):
+    
+    # 1. Initialize your raw client
+    raw_client = LMStudioClient(model=model_name)
+    
+    # 2. Adapt it to LangChain
+    lc_client = LMStudioLangChainAdapter(client=raw_client)
+
+    # 3. Wrap it for RAGAS (just like the local function does)
+    run_config = RunConfig(timeout=120)
+    ragas_llm = LangchainLLMWrapper(lc_client, run_config)
+    
+    model_predictions = read_json_with_pandas(filepath=f"{input_file}")
+
+    model_predictions['inquiry'] = model_predictions['input'].apply(extract_conversation)
+    model_predictions['document'] = model_predictions['contexts'].apply(extract_document_texts)
+    model_predictions['response'] = model_predictions['predictions'].apply(extract_texts)
+
+    data_samples = {}
+    data_samples['question'] = model_predictions['inquiry'].values.tolist()
+    data_samples['answer'] = model_predictions['response'].values.tolist()
+    data_samples['contexts'] = model_predictions['document'].values.tolist()
+
+    dataset = Dataset.from_dict(data_samples)
+
+    score = evaluate(
+        dataset,
+        llm=ragas_llm, # <--- Pass the wrapped RAGAS LLM here
+        metrics=[
+            faithfulness,
+            ],
+        run_config=run_config
+        )
+    
+    df_score = score.to_pandas()
+
+    model_predictions['RL_F'] = df_score['faithfulness'].values
+
+    if 'metrics' not in model_predictions:
+        model_predictions['metrics'] = None
+
+    model_predictions['metrics'] = model_predictions.apply(lambda row: update_or_create_dict(row.get('metrics'), row['RL_F'], 'RL_F'), axis=1)
+
+    keys_to_remove = ["inquiry", "document", "response", "RL_F"]
+    model_predictions = remove_keys_from_df(model_predictions, keys_to_remove)
+
+    model_predictions.to_json(output_file, orient="records", lines=True)
+
+
+# ================================================
 # Run Radbench Judge
 # ================================================
 def run_radbench_judge(judge_model, input_file, output_file):
@@ -250,8 +328,9 @@ def run_radbench_judge(judge_model, input_file, output_file):
         if model_name.startswith("gpt-"):
             client = AzureOpenAIClient('gpt-4o-mini-2024-07-18')
         else:
-            clear_cuda()
-            client = HuggingFaceLLMClient(model_name)
+            # clear_cuda()
+            # client = HuggingFaceLLMClient(model_name)
+            client = LMStudioClient(model=model_name)
         
         output_lst = ['' for i in range(len(user_inputs))]
         
@@ -287,8 +366,10 @@ def run_idk_judge(model_name, input_file, output_file):
     if model_name == "openai":
         client = AzureOpenAIClient('gpt-4o-mini-2024-07-18')
     else:
-        clear_cuda()
-        client = HuggingFaceLLMClient(model_name)
+        client = LMStudioClient(model=model_name)
+    # else:
+    #     clear_cuda()
+    #     client = HuggingFaceLLMClient(model_name)
         
     model_predictions = read_json_with_pandas(filepath=f"{input_file}")
     
@@ -302,7 +383,7 @@ def run_idk_judge(model_name, input_file, output_file):
         if model_name == "openai":
             response = client.generate_response(cur_prompt)
         else:
-            response = client.generate_response(cur_prompt, max_new_tokens = 3)
+            response = client.generate_response(cur_prompt)
         response_lst.append(response)
             
     model_predictions['idk_eval'] = response_lst
