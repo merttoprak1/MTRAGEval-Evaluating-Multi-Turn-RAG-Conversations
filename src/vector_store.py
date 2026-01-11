@@ -6,7 +6,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from src.embeddings import LocalOllamaEmbeddings
-
+import time
+import json 
 logger = logging.getLogger(__name__)
 
 # Supported Vector DB types
@@ -54,61 +55,85 @@ def _get_embedding_model(embedding_config: dict):
         raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
-def _setup_faiss(documents: List[Document], embedding_model, collection_name: str, is_gemini: bool, db_config: dict = None):
-    """Setup FAISS vector store."""
-    import time
-    
-    # Use index_name from config if provided
-    index_name = db_config.get("index_name", "default") if db_config else "default"
-    persist_directory = f"./faiss_db_{collection_name}_{index_name}"
+def _setup_faiss(
+    documents: List[Document],
+    embedding_model,
+    collection_name: str,
+    is_gemini: bool,
+    db_config: dict = None
+):
+    """
+    FAISS collection behavior:
+    - If collection exists → load FAISS → append documents
+    - If collection does not exist → create → build FAISS
+    """
+
+    persist_directory = f"./collections/{collection_name}"
+    index_faiss_path = os.path.join(persist_directory, "index.faiss")
+    index_pkl_path = os.path.join(persist_directory, "index.pkl")
+
+    batch_size = 100 if is_gemini else 1000
+    delay = 1.0 if is_gemini else 0.0
+
     vector_store = None
-    index_loaded = False
-    
-    # Try to load existing
-    if os.path.exists(persist_directory):
-        try:
-            logger.info(f"Loading existing FAISS index from {persist_directory}")
-            vector_store = FAISS.load_local(persist_directory, embedding_model, allow_dangerous_deserialization=True)
-            index_loaded = True
-            logger.info(f"Successfully loaded existing FAISS index with {vector_store.index.ntotal} vectors")
-        except Exception as e:
-            logger.warning(f"Failed to load existing index: {e}")
-    
-    # Only ingest documents if no existing index was loaded
-    if documents and not index_loaded:
-        logger.info(f"Ingesting {len(documents)} documents into FAISS (this may take a while...)")
-        # Use larger batch size for efficiency
-        batch_size = 100 if is_gemini else 1000 
-        delay = 1.0 if is_gemini else 0.0  # Reduced delay
-        total_docs = len(documents)
-        
-        start_index = 0
-        if vector_store is None:
-            initial_batch = documents[:batch_size]
-            logger.info(f"Initializing FAISS with first batch of {len(initial_batch)} documents")
-            vector_store = FAISS.from_documents(initial_batch, embedding_model)
-            start_index = batch_size
-            if is_gemini and start_index < total_docs:
-                time.sleep(delay)
-        
-        for i in range(start_index, total_docs, batch_size):
-            batch = documents[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (total_docs + batch_size - 1) // batch_size
-            logger.info(f"Adding batch {batch_num}/{total_batches} ({len(batch)} docs, {i+len(batch)}/{total_docs} total)")
-            vector_store.add_documents(batch)
-            # Save periodically every 10 batches
-            if batch_num % 10 == 0:
-                vector_store.save_local(persist_directory)
-            if is_gemini and (i + batch_size < total_docs):
-                time.sleep(delay)
-        
-        # Final save
+
+    # --------------------------------------------------
+    # 1. Create collection folder if missing
+    # --------------------------------------------------
+    os.makedirs(persist_directory, exist_ok=True)
+
+    # --------------------------------------------------
+    # 2. Load existing FAISS index if present
+    # --------------------------------------------------
+    if os.path.exists(index_faiss_path) and os.path.exists(index_pkl_path):
+        logger.info(f"Loading existing FAISS collection: {collection_name}")
+
+        vector_store = FAISS.load_local(
+            persist_directory,
+            embedding_model,
+            allow_dangerous_deserialization=True
+        )
+
+        logger.info(f"Loaded {vector_store.index.ntotal} existing vectors")
+
+    # --------------------------------------------------
+    # 3. Create FAISS if it does not exist
+    # --------------------------------------------------
+    elif documents:
+        logger.info(f"Creating new FAISS collection: {collection_name}")
+
+        vector_store = FAISS.from_documents(
+            documents[:batch_size],
+            embedding_model
+        )
+
+        documents = documents[batch_size:]
         vector_store.save_local(persist_directory)
-        logger.info("FAISS ingestion complete")
-    elif index_loaded:
-        logger.info("Using existing FAISS index, skipping ingestion")
-    
+        with open(f"{persist_directory}/info.json", "w", encoding="utf-8") as f:
+            json.dump(db_config, f, ensure_ascii=False, indent=4)
+
+    else:
+        raise ValueError(
+            f"Collection '{collection_name}' does not exist and no documents were provided"
+        )
+
+    # --------------------------------------------------
+    # 4. Add new documents (append)
+    # --------------------------------------------------
+    if documents:
+        logger.info(f"Adding {len(documents)} new documents to collection")
+
+        for i in range(0, len(documents), batch_size):
+            logger.info(f"Processing :  {i}/{len(documents)}")
+            batch = documents[i:i + batch_size]
+            vector_store.add_documents(batch)
+
+            if is_gemini and i + batch_size < len(documents):
+                time.sleep(delay)
+
+        vector_store.save_local(persist_directory)
+        logger.info("FAISS collection updated")
+
     return vector_store
 
 
