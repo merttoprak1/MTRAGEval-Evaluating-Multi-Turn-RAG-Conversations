@@ -344,7 +344,6 @@ def render():
 
             st.subheader("🤖 Generation")
 
-            import concurrent.futures
             
 
             def process_single_record(
