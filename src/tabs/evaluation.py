@@ -20,7 +20,7 @@ from src.beir_utils import (
 )
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-
+from src.calculate_ranking import append_ranking_score
 def render():
     st.header("📊 Batch Evaluation")
     
