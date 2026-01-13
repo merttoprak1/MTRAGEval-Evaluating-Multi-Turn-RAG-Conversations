@@ -35,6 +35,8 @@ def evaluate(qrels: Dict[str, Dict[str, int]],
         precision_string = "P." + ",".join([str(k) for k in k_values])
         # evaluator = pytrec_eval.RelevanceEvaluator(qrels, {map_string, ndcg_string, recall_string, precision_string})
         evaluator = pytrec_eval.RelevanceEvaluator(qrels, {ndcg_string, recall_string})
+        scores = evaluator.evaluate(results)
+        
         if not scores:
             print("WARNING: No overlapping Query IDs found between Predictions and Qrels!")
             print(f"Sample Qrels IDs: {list(qrels.keys())[:3]}")
@@ -53,7 +55,40 @@ def evaluate(qrels: Dict[str, Dict[str, int]],
                 recall[f"Recall@{k}"] = round(recall[f"Recall@{k}"]/num_scores, 5)
 
         return scores, ndcg, _map, recall, precision
-    
+
+def get_base_id(doc_id):
+    """
+    Extracts base document ID by removing chunk suffix (e.g. 'doc1-0-100' -> 'doc1').
+    Assumes suffix format is -<start>-<end> where start and end are digits.
+    """
+    import re
+    # Match suffix pattern: -digits-digits at the end
+    match = re.search(r"(.*)-\d+-\d+$", doc_id)
+    if match:
+        return match.group(1)
+    return doc_id
+
+def evaluate_relaxed(qrels, results, k_values):
+    """
+    Computes metrics based on 'Base Document Match' rather than Exact Chunk ID Match.
+    """
+    relaxed_qrels = {}
+    for qid, docs in qrels.items():
+        relaxed_qrels[qid] = {}
+        for doc_id, score in docs.items():
+            base_id = get_base_id(doc_id)
+            # Max score if multiple chunks from same doc are relevant
+            relaxed_qrels[qid][base_id] = max(score, relaxed_qrels[qid].get(base_id, 0))
+
+    relaxed_results = {}
+    for qid, docs in results.items():
+        relaxed_results[qid] = {}
+        for doc_id, score in docs.items():
+            base_id = get_base_id(doc_id)
+            # Max score if multiple chunks from same doc are retrieved
+            relaxed_results[qid][base_id] = max(score, relaxed_results[qid].get(base_id, 0.0))
+
+    return evaluate(relaxed_qrels, relaxed_results, k_values)
 
 def compute_results(results, qrels):
 
@@ -62,7 +97,17 @@ def compute_results(results, qrels):
         ndcg = _map = recall = precision = mrr = {i: 0.0 for i in k_values}
         scores_per_query_id = {}
     else:
+        print("\n--- Strict Evaluation (Chunk ID Match) ---")
         scores_per_query_id, ndcg, _map, recall, precision = evaluate(qrels, results, k_values)
+        
+        # Also compute Relaxed Metrics
+        print("\n--- Relaxed Evaluation (Base Document Match) ---")
+        _, r_ndcg, _, r_recall, _ = evaluate_relaxed(qrels, results, k_values)
+        
+        # Merge Relaxed scores into global output with prefix
+        for k in k_values:
+            ndcg[f"Doc_NDCG@{k}"] = r_ndcg[f"NDCG@{k}"]
+            recall[f"Doc_Recall@{k}"] = r_recall[f"Recall@{k}"]
 
     scores_global = {}
     scores_global[f"nDCG"] = list(ndcg.values())
@@ -94,6 +139,10 @@ def prepare_results_dict(input_file):
         for line in f:
             item = json.loads(line)
             query_id = item["task_id"]
+            
+            # Normalize ID format if necessary (Predictions sometimes use '::' instead of '<::>')
+            if "::" in query_id and "<::>" not in query_id:
+                query_id = query_id.replace("::", "<::>")
             
             doc_scores = {}
             for ctx in item.get("contexts", []):

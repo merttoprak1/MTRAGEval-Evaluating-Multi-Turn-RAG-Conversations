@@ -206,13 +206,13 @@ def render():
             is_ready = (eval_dataset_path is not None)
 
         
-            if not is_ready:
-                if selected_category == "Task A":
-                    st.warning("Please upload a predictions file to evaluate.")
-                else:
-                    st.warning("Please upload a file to evaluate.")
+        if not is_ready:
+            if selected_category == "Task A":
+                st.warning("Please upload a predictions file to evaluate.")
             else:
-                with st.spinner("Running evaluation..."):
+                st.warning("Please upload a file to evaluate.")
+        else:
+            with st.spinner("Running evaluation..."):
                     import time
                     eval_start = time.time()
                 
@@ -246,11 +246,13 @@ def render():
                                 st.write("📊 Running official MTRAG retrieval evaluation...")
                                 
                                 try:
+                                    # Get project root (parent of src/tabs/)
+                                    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                                     result = subprocess.run(
                                         run_retrieval_eval_command, 
                                         capture_output=True, 
                                         text=True,
-                                        cwd=os.path.dirname(os.path.abspath(__file__)))                                
+                                        cwd=project_root)                                
                                     if result.returncode == 0:
                                         status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
                                         
@@ -258,7 +260,7 @@ def render():
                                             st.subheader("📈 Retrieval Metrics")
                                             st.code(result.stdout)
                                         
-                                        aggregate_csv = output_path.replace("_results.jsonl", "_results_aggregate.csv")
+                                        aggregate_csv = os.path.splitext(output_path)[0] + "_aggregate.csv"
                                         if os.path.exists(aggregate_csv):
                                             st.subheader("📋 Aggregate Results")
                                             df_agg = pd.read_csv(aggregate_csv)
