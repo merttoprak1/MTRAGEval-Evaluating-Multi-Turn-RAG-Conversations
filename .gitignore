@@ -15,3 +15,9 @@ collections/
 predictions/
 query_rewrite_files/
 app.log
+corpus/*
+.vscode
+human/
+*.jsonl
+*.json
+*.zip
