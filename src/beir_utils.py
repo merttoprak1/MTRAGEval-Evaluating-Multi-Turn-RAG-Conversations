@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple, Optional
 logger = logging.getLogger(__name__)
 
 # Base paths for retrieval tasks
-RETRIEVAL_TASKS_BASE = Path(__file__).parent.parent.parent / "human" / "retrieval_tasks"
+RETRIEVAL_TASKS_BASE = Path(__file__).parent.parent / "human" / "retrieval_tasks"
 
 # Available corpora
 AVAILABLE_CORPORA = ["clapnq", "cloud", "fiqa", "govt"]

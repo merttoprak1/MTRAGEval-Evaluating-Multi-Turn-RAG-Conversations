@@ -106,8 +106,26 @@ def render():
         with conf_col2:
                 # Retrieval Settings Override
                 task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
-            
-        collection_name = st.selectbox("Collections", collections_list, key="task_a_collections")
+        
+        # Collection mapping: maps input Collection names to local collection folders
+        def map_collection_name(input_collection: str) -> str:
+            """Map input Collection field to local collection folder name."""
+            input_lower = input_collection.lower()
+            for local_col in collections_list:
+                local_lower = local_col.lower()
+                # Check if key parts match (e.g., 'clapnq', 'govt', 'fiqa', 'cloud')
+                if 'clapnq' in input_lower and 'clapnq' in local_lower:
+                    return local_col
+                if 'govt' in input_lower and 'govt' in local_lower:
+                    return local_col
+                if 'fiqa' in input_lower and 'fiqa' in local_lower:
+                    return local_col
+                if ('cloud' in input_lower or 'ibmcloud' in input_lower) and ('cloud' in local_lower or 'ibmcloud' in local_lower):
+                    return local_col
+            # Fallback: return first collection or the input as-is
+            return collections_list[0] if collections_list else input_collection
+        
+        st.info(f"📁 Available collections: {', '.join(collections_list)}")
 
         # --- Query Rewrite Configuration ---
         with st.expander("✏️ Query Rewrite Configuration", expanded=True):
@@ -144,17 +162,32 @@ def render():
                     if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                         llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
-                    # CRITICAL: Capture vector_store locally for threads
-                    with open(f"collections/{collection_name}/info.json", "r", encoding="utf-8") as f:
-                        collection_infos = json.load(f)
-                    embedding_config["model_name"] = collection_infos["embedding"]["model_name"]
-                    selected_collections = setup_vector_store(
-                        documents=None, 
-                        embedding_config=embedding_config, 
-                        collection_name=collection_name,
-                        db_config={}
-                    )
-                    vector_store_instance = selected_collections
+                    # Collection cache for dynamic loading
+                    collection_cache = {}
+                    
+                    def get_vector_store_for_collection(collection_field: str):
+                        """Get or create vector store for a collection, with caching."""
+                        local_collection = map_collection_name(collection_field)
+                        
+                        if local_collection in collection_cache:
+                            return collection_cache[local_collection], local_collection
+                        
+                        try:
+                            with open(f"collections/{local_collection}/info.json", "r", encoding="utf-8") as f:
+                                collection_infos = json.load(f)
+                            embed_cfg = embedding_config.copy()
+                            embed_cfg["model_name"] = collection_infos["embedding"]["model_name"]
+                            vs = setup_vector_store(
+                                documents=None, 
+                                embedding_config=embed_cfg, 
+                                collection_name=local_collection,
+                                db_config={}
+                            )
+                            collection_cache[local_collection] = vs
+                            return vs, local_collection
+                        except Exception as e:
+                            logger.error(f"Failed to load collection {local_collection}: {e}")
+                            return None, local_collection
 
                     # --- DEFINING THE WORKER FUNCTION ---
                     def process_single_item(item):
@@ -172,7 +205,11 @@ def render():
                                 )
                                 final_query = rewrite_result['rewritten']
 
-                            # B. Retrieve
+                            # B. Get vector store for this item's collection and Retrieve
+                            vector_store_instance, local_col = get_vector_store_for_collection(item['collection'])
+                            if vector_store_instance is None:
+                                logger.error(f"No vector store for collection {item['collection']}")
+                                return None
                             docs_with_scores = vector_store_instance.similarity_search_with_score(final_query, k=task_a_top_k)
                             
                             # C. Format Contexts
@@ -217,10 +254,10 @@ def render():
                             if not line.strip(): continue
                             data = json.loads(line)
                             
-                            # Parse MTRAG vs BEIR
+                            # Parse MTRAG format only
                             parsed_item = {}
                             
-                            # CASE 1: MTRAG (Has 'input' list - Rich Metadata)
+                            # MTRAG Format (Has 'input' list - Rich Metadata)
                             if "input" in data and isinstance(data["input"], list):
                                 conv = data["input"]
                                 if not conv: continue
@@ -231,26 +268,13 @@ def render():
                                     "task_type": data.get("task_type", "rag"),
                                     "turn": data.get("turn", line_idx),
                                     "dataset": data.get("dataset", "unknown"),
-                                    "collection": data.get("Collection", collection_name),
+                                    "collection": data.get("Collection", ""),
                                     "text": conv[-1]['text'], # Current query
                                     "history": conv[:-1],     # History
                                     "original_input_obj": conv
                                 }
-                            
-                            # CASE 2: BEIR (Has 'text' and '_id' - Minimal Metadata)
-                            elif "text" in data and "_id" in data:
-                                parsed_item = {
-                                    "id": data["_id"],
-                                    "conversation_id": data["_id"], # Fallback
-                                    "task_type": "rag",
-                                    "turn": 1,
-                                    "dataset": "BEIR",
-                                    "collection": collection_name,
-                                    "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
-                                    "history": [], 
-                                    "original_input_obj": [{"speaker": "user", "text": data["text"]}]
-                                }
                             else:
+                                logger.warning(f"Skipping line {line_idx}: not in MTRAG format")
                                 continue 
                             
                             items_to_process.append(parsed_item)
@@ -282,7 +306,7 @@ def render():
                     
                     # Create a timestamped filename to avoid overwriting
                     timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    save_filename = f"task_a_{collection_name}_{timestamp}.jsonl"
+                    save_filename = f"task_a_multi_{timestamp}.jsonl"
                     save_path = os.path.join(predictions_dir, save_filename)
                     
                     with open(save_path, "w", encoding="utf-8") as f:
@@ -292,7 +316,7 @@ def render():
                     os.makedirs(rewrite_dir , exist_ok=True)
                     # Create a timestamped filename to avoid overwriting
                     timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    save_filename = f"task_a_{collection_name}_{uploaded_file.name.split('.')[0]}_{timestamp}.jsonl"
+                    save_filename = f"task_a_multi_{uploaded_file.name.split('.')[0]}_{timestamp}.jsonl"
                     save_path = os.path.join(rewrite_dir, save_filename)
 
 

@@ -195,9 +195,9 @@ def run_task_a_retrieval(
                 {
                     "document_id": doc.metadata.get("id", ""),
                     "text": doc.page_content,
-                    "score": 1.0  # Default score
+                    "score": 1.0 / (i + 1)  # Use reciprocal rank as score to preserve order
                 }
-                for doc in docs
+                for i, doc in enumerate(docs)
             ]
         except Exception as e:
             logger.error(f"Retrieval failed for {task_id}: {e}")
@@ -299,9 +299,9 @@ def run_task_c_rag(
                 {
                     "document_id": doc.metadata.get("id", ""),
                     "text": doc.page_content,
-                    "score": 1.0
+                    "score": 1.0 / (i + 1)
                 }
-                for doc in context_docs
+                for i, doc in enumerate(context_docs)
             ] if context_docs else []
             
         except Exception as e:

@@ -130,14 +130,18 @@ def main():
     for collection_name in collections:
         print("\ncollection_name:", collection_name)
 
-        if collection_name == "mt-rag-clapnq-elser-512-100-20240503":
-            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks_convid/clapnq/qrels/dev.tsv")
-        if collection_name == "mt-rag-govt-elser-512-100-20240611":
-            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks_convid/govt/qrels/dev.tsv")
-        if collection_name == "mt-rag-fiqa-beir-elser-512-100-20240501":
-            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks_convid/fiqa/qrels/dev.tsv")
-        if collection_name == "mt-rag-ibmcloud-elser-512-100-20240502":
-            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks_convid/cloud/qrels/dev.tsv")
+        if collection_name == "mt-rag-clapnq-elser-512-100-20240503" or "clapnq" in collection_name.lower():
+            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks/clapnq/qrels/dev.tsv")
+        elif collection_name == "mt-rag-govt-elser-512-100-20240611" or "govt" in collection_name.lower():
+            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks/govt/qrels/dev.tsv")
+        elif collection_name == "mt-rag-fiqa-beir-elser-512-100-20240501" or "fiqa" in collection_name.lower():
+            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks/fiqa/qrels/dev.tsv")
+        elif collection_name == "mt-rag-ibmcloud-elser-512-100-20240502" or "cloud" in collection_name.lower():
+            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks/cloud/qrels/dev.tsv")
+        else:
+            # Default to clapnq if collection name doesn't match
+            print(f"Warning: Unknown collection '{collection_name}', defaulting to clapnq qrels")
+            qrels_file = os.path.join(script_dir, "../../human/retrieval_tasks/clapnq/qrels/dev.tsv")
             
         qrels = load_qrels(qrels_file)
         

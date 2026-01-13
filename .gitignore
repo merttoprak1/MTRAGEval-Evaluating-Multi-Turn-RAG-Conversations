@@ -11,8 +11,7 @@ human/generation_tasks/*.jsonl
 venv
 .DS_Store
 .venv
-collections
-*.jsonl
-*.json
-*.zip
-.vscode
+collections/
+predictions/
+query_rewrite_files/
+app.log
