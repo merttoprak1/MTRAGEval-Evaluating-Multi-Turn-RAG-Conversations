@@ -35,16 +35,22 @@ def evaluate(qrels: Dict[str, Dict[str, int]],
         precision_string = "P." + ",".join([str(k) for k in k_values])
         # evaluator = pytrec_eval.RelevanceEvaluator(qrels, {map_string, ndcg_string, recall_string, precision_string})
         evaluator = pytrec_eval.RelevanceEvaluator(qrels, {ndcg_string, recall_string})
-        scores = evaluator.evaluate(results)
-        
+        if not scores:
+            print("WARNING: No overlapping Query IDs found between Predictions and Qrels!")
+            print(f"Sample Qrels IDs: {list(qrels.keys())[:3]}")
+            print(f"Sample Preds IDs: {list(results.keys())[:3]}")
+            return {}, ndcg, _map, recall, precision
+
         for query_id in scores.keys():
             for k in k_values:
                 ndcg[f"NDCG@{k}"] += scores[query_id]["ndcg_cut_" + str(k)]
                 recall[f"Recall@{k}"] += scores[query_id]["recall_" + str(k)]
         
-        for k in k_values:
-            ndcg[f"NDCG@{k}"] = round(ndcg[f"NDCG@{k}"]/len(scores), 5)
-            recall[f"Recall@{k}"] = round(recall[f"Recall@{k}"]/len(scores), 5)
+        num_scores = len(scores)
+        if num_scores > 0:
+            for k in k_values:
+                ndcg[f"NDCG@{k}"] = round(ndcg[f"NDCG@{k}"]/num_scores, 5)
+                recall[f"Recall@{k}"] = round(recall[f"Recall@{k}"]/num_scores, 5)
 
         return scores, ndcg, _map, recall, precision
     
@@ -53,7 +59,8 @@ def compute_results(results, qrels):
 
     k_values = [1, 3, 5]
     if len(results) == 0:
-        ndcg = _map = recall = precision = mrr = {i: '-' for i in k_values}
+        ndcg = _map = recall = precision = mrr = {i: 0.0 for i in k_values}
+        scores_per_query_id = {}
     else:
         scores_per_query_id, ndcg, _map, recall, precision = evaluate(qrels, results, k_values)
 
