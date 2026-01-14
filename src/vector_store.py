@@ -85,9 +85,6 @@ def _setup_faiss(
     # --------------------------------------------------
     # 2. Load existing FAISS index if present
     # --------------------------------------------------
-    # --------------------------------------------------
-    # 2. Load existing FAISS index if present
-    # --------------------------------------------------
     if os.path.exists(index_faiss_path) and os.path.exists(index_pkl_path):
         logger.info(f"Loading existing FAISS collection: {collection_name}")
 
@@ -105,21 +102,10 @@ def _setup_faiss(
     elif documents:
         logger.info(f"Creating new FAISS collection: {collection_name}")
 
-        # Extract IDs if available
-        batch_docs = documents[:batch_size]
-        batch_ids = [d.metadata.get("_id", d.metadata.get("id")) for d in batch_docs]
-        # Filter out None IDs if any (though best to have them all or none)
-        if all(batch_ids):
-             vector_store = FAISS.from_documents(
-                batch_docs,
-                embedding_model,
-                ids=batch_ids
-            )
-        else:
-            vector_store = FAISS.from_documents(
-                batch_docs,
-                embedding_model
-            )
+        vector_store = FAISS.from_documents(
+            documents[:batch_size],
+            embedding_model
+        )
 
         documents = documents[batch_size:]
         vector_store.save_local(persist_directory)
@@ -140,14 +126,7 @@ def _setup_faiss(
         for i in range(0, len(documents), batch_size):
             logger.info(f"Processing :  {i}/{len(documents)}")
             batch = documents[i:i + batch_size]
-            
-            # Extract IDs
-            batch_ids = [d.metadata.get("_id", d.metadata.get("id")) for d in batch]
-            
-            if all(batch_ids):
-                vector_store.add_documents(batch, ids=batch_ids)
-            else:
-                vector_store.add_documents(batch)
+            vector_store.add_documents(batch)
 
             if is_gemini and i + batch_size < len(documents):
                 time.sleep(delay)
