@@ -53,6 +53,9 @@ def run_task_a_retrieval(
     output_filename_prefix: str = "task_a",
     output_dir: str = "predictions/task_a",
     rewrite_dir: str = "predictions/task_a"
+    output_filename_prefix: str = "task_a",
+    output_dir: str = "predictions/task_a",
+    rewrite_dir: str = "predictions/task_a"
 ) -> tuple[str, str]:
     """
     Execute Task A retrieval logic.
@@ -706,8 +709,6 @@ def render():
                     llm_for_rewrite=llm_for_rewrite,
                     task_a_top_k=task_c_top_k,
                     max_workers=max_workers_retrieval,
-                    task_a_top_k=task_c_top_k,
-                    max_workers=max_workers_retrieval,
                     output_filename_prefix="task_c_retrieval",
                     output_dir="predictions/task_c/retrieval",
                     rewrite_dir="predictions/task_c/retrieval"
@@ -732,8 +733,6 @@ def render():
                 generation_output_path = run_task_b_generation(
                     input_file_path=predictions_path,
                     gen_prompt_template=gen_prompt_template,
-                    llm=llm,
-                    max_workers=max_workers_generation,
                     llm=llm,
                     max_workers=max_workers_generation,
                     output_filename_prefix=f"task_c_{uploaded_file.name.split('.')[0]}",
