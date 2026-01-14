@@ -7,6 +7,7 @@ import platform
 import logging
 import sys
 import json
+import zipfile
 import concurrent.futures
 from pathlib import Path
 from src.ingestion import load_json_documents, chunk_documents, load_beir_queries
@@ -56,7 +57,7 @@ def main():
         "💬 Interactive Playground", 
         "📊 Batch Evaluation",
         "📚 Knowledge Base", 
-        "📝 Logs & Debugging"  # Changed from Database Inspector
+        "📝 Logs & Debugging" 
     ])
 
     # ==================== TAB: KNOWLEDGE BASE =============================
@@ -235,40 +236,151 @@ def main():
 
         # --- Ingestion Section ---
         st.subheader("3. Data Ingestion")
-        uploaded_file = st.file_uploader("Upload Documents (JSON/JSONL)", type=["json", "jsonl"])
+        
+        # UI: Toggle between Upload and Pre-defined Corpora
+        ingest_mode = st.radio("Data Source", ["Upload File", "Choose from MT-RAG Corpora"], horizontal=True)
+        
+        if ingest_mode == "Upload File":
+            uploaded_file = st.file_uploader("Upload Documents (JSON/JSONL)", type=["json", "jsonl"])
 
-        if uploaded_file:
-            if st.button("Process & Ingest File"):
-                if not kb_name:
-                    st.error("Please provide a Knowledge Base Name first.")
-                else:
-                    with st.spinner("Processing..."):
-                        try:
-                            suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                                tmp_file.write(uploaded_file.getvalue())
-                                tmp_file_path = tmp_file.name
-                            
-                            documents = load_json_documents(tmp_file_path)
-                            if documents:
-                                chunks = chunk_documents(documents)
-                                if embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
-                                    st.error("OpenAI API Key required for embedding.")
+            if uploaded_file:
+                if st.button("Process & Ingest File"):
+                    if not kb_name:
+                        st.error("Please provide a Knowledge Base Name first.")
+                    else:
+                        with st.spinner("Processing..."):
+                            try:
+                                suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                                    tmp_file.write(uploaded_file.getvalue())
+                                    tmp_file_path = tmp_file.name
+                                
+                                documents = load_json_documents(tmp_file_path)
+                                if documents:
+                                    chunks = chunk_documents(documents)
+                                    if embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
+                                        st.error("OpenAI API Key required for embedding.")
+                                    else:
+                                        if api_key: os.environ["OPENAI_API_KEY"] = api_key
+                                        
+                                        st.session_state.vector_store = setup_vector_store(
+                                            chunks, embedding_config, kb_name, vector_db_type, db_config
+                                        )
+                                        st.session_state.current_collection = kb_name
+                                        st.success(f"Successfully ingested {len(chunks)} chunks into '{kb_name}'")
                                 else:
-                                    if api_key: os.environ["OPENAI_API_KEY"] = api_key
+                                    st.error("No valid documents found.")
+                                os.remove(tmp_file_path)
+                            except Exception as e:
+                                st.error(f"Ingestion failed: {e}")
+        
+        else: # Choose from MT-RAG Corpora
+            corpora_root = Path("corpora")
+            # Default to document_level as it contains the full text typically used for chunking
+            corpus_level = st.selectbox("Corpus Level", ["document_level", "passage_level"], index=0)
+            target_dir = corpora_root / corpus_level
+            
+            available_corpora = []
+            if target_dir.exists():
+                # Find zip files
+                available_corpora = [f.name for f in target_dir.glob("*.zip")]
+            
+            if not available_corpora:
+                st.warning(f"No corpora found in {target_dir}. Please check folder structure.")
+            else:
+                # Clean names for display (remove .jsonl.zip)
+                display_map = {f: f.replace(".jsonl.zip", "").replace(".zip", "") for f in available_corpora}
+                # Add "Full Corpora" option
+                options = ["Full Corpora"] + list(display_map.values())
+                
+                selected_corpus_name = st.selectbox("Select Corpus", options)
+                
+                if st.button("Ingest Selected"):
+                    if not kb_name:
+                        st.error("Please provide a Knowledge Base Name first (used as suffix).")
+                    elif embedding_provider == "OpenAI" and not embedding_config.get("api_key"):
+                        st.error("OpenAI API Key required for embedding.")
+                    else:
+                        if api_key: os.environ["OPENAI_API_KEY"] = api_key
+                        
+                        corpora_to_process = []
+                        
+                        # Determine which files to process
+                        if selected_corpus_name == "Full Corpora":
+                            # Process all
+                            corpora_to_process = list(display_map.keys())
+                            st.info(f"Preparing to ingest {len(corpora_to_process)} corpora. This may take time.")
+                        else:
+                            # Process specific one. Find the original filename from the display name
+                            for orig, disp in display_map.items():
+                                if disp == selected_corpus_name:
+                                    corpora_to_process = [orig]
+                                    break
+                        
+                        # Processing Loop
+                        progress_bar = st.progress(0)
+                        for idx, filename in enumerate(corpora_to_process):
+                            zip_path = target_dir / filename
+                            clean_name = display_map[filename] # e.g., "clapnq"
+                            
+                            with st.spinner(f"Processing {clean_name} ({idx+1}/{len(corpora_to_process)})..."):
+                                try:
+                                    # 1. Unzip to temp
+                                    with tempfile.TemporaryDirectory() as temp_dir:
+                                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                                            zip_ref.extractall(temp_dir)
+                                            
+                                            # Find the jsonl file inside
+                                            extracted_files = [str(p) for p in Path(temp_dir).glob("*.jsonl")]
+                                            if not extracted_files:
+                                                st.error(f"No .jsonl file found inside {filename}")
+                                                continue
+                                                
+                                            target_file = extracted_files[0]
+                                            
+                                            # 2. Load & Chunk
+                                            documents = load_json_documents(target_file)
+                                            if not documents:
+                                                st.warning(f"No documents found in {clean_name}")
+                                                continue
+                                                
+                                            chunks = chunk_documents(documents)
+                                            
+                                            # 3. Ingest
+                                            # If Full Corpora, we want separate DBs: faiss_db_{corpus}_{kb_name}
+                                            # If Single Corpus, we usually want faiss_db_{kb_name}_{default} OR faiss_db_{corpus}_{kb_name}
+                                            # To be safe and consistent with "Full Corpora" saving logic:
+                                            # We will use the corpus name as the 'collection_name' argument to setup_vector_store
+                                            # and the user's KB name as the index suffix.
+                                            
+                                            current_coll_name = clean_name if selected_corpus_name == "Full Corpora" else clean_name
+                                            # Override index name in config to user's KB name tag
+                                            current_db_config = db_config.copy()
+                                            current_db_config["index_name"] = kb_name 
+                                            # Ensure we don't force a folder name override during fresh ingestion
+                                            if "folder_name" in current_db_config:
+                                                del current_db_config["folder_name"]
+
+                                            st.session_state.vector_store = setup_vector_store(
+                                                chunks, 
+                                                embedding_config, 
+                                                collection_name=current_coll_name, 
+                                                db_type=vector_db_type, 
+                                                db_config=current_db_config
+                                            )
+                                            
+                                            # Set active session to the last one processed
+                                            st.session_state.current_collection = current_coll_name
+                                            
+                                    st.success(f"✅ {clean_name} ingested.")
                                     
-                                    # NOTE: if folder_name_override is set, we ingest INTO that folder. 
-                                    # If user wants a NEW folder, they must select "Create New" in dropdown.
-                                    st.session_state.vector_store = setup_vector_store(
-                                        chunks, embedding_config, kb_name, vector_db_type, db_config
-                                    )
-                                    st.session_state.current_collection = kb_name
-                                    st.success(f"Successfully ingested {len(chunks)} chunks into '{kb_name}'")
-                            else:
-                                st.error("No valid documents found.")
-                            os.remove(tmp_file_path)
-                        except Exception as e:
-                            st.error(f"Ingestion failed: {e}")
+                                except Exception as e:
+                                    st.error(f"Failed to ingest {clean_name}: {e}")
+                                    logger.error(f"Ingestion error for {clean_name}: {e}", exc_info=True)
+                            
+                            progress_bar.progress((idx + 1) / len(corpora_to_process))
+                        
+                        st.success("🎉 Batch Ingestion Complete!")
 
         # --- Management Section ---
         st.divider()
@@ -395,15 +507,12 @@ def main():
                         # Re-instantiate LLM for threads if needed
                         # Note: 'provider', 'api_key' are from the main scope. 
                         # To be safe, we fetch them from session state or assume main scope access.
-                        # It is safer to re-read from sidebar widgets if they are in scope, 
-                        # but inside a function/thread we need copies.
                         if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                             llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
                         # Capture vector_store locally for threads
                         vector_store_instance = st.session_state.vector_store
                         
-                        # FIXED: Get collection name safely
                         active_collection = st.session_state.get("current_collection", "unknown_collection")
 
                         # --- DEFINING THE WORKER FUNCTION ---
@@ -441,7 +550,6 @@ def main():
                                     "task_id": item['id'],
                                     "task_type": item.get('task_type', 'rag'),
                                     "turn": item.get('turn'),
-                                    # FIXED: Use active_collection instead of undefined variable
                                     "Collection": item.get('collection', active_collection),
                                     "dataset": item.get('dataset', 'unknown'),
                                     "contexts": contexts,
@@ -478,7 +586,7 @@ def main():
                                         "task_type": data.get("task_type", "rag"),
                                         "turn": data.get("turn", line_idx),
                                         "dataset": data.get("dataset", "unknown"),
-                                        "collection": data.get("Collection", active_collection), # FIXED
+                                        "collection": data.get("Collection", active_collection),
                                         "text": conv[-1]['text'],
                                         "history": conv[:-1],
                                         "original_input_obj": conv
@@ -492,7 +600,7 @@ def main():
                                         "task_type": "rag",
                                         "turn": 1,
                                         "dataset": "BEIR",
-                                        "collection": active_collection, # FIXED
+                                        "collection": active_collection,
                                         "text": data["text"].replace("|user|:", "").replace("|agent|:", "").strip(),
                                         "history": [], 
                                         "original_input_obj": [{"speaker": "user", "text": data["text"]}]

@@ -1,163 +1,165 @@
-# MTRAGEval - Multi-Turn RAG Evaluation System
+Markdown
 
-A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRAG Benchmark** for evaluating multi-turn conversational AI. Built with Streamlit, LangChain, and FAISS.
+# 🤖 Modular MT-RAG Workbench
 
-## Features
+A high-performance, modular RAG (Retrieval-Augmented Generation) workbench designed for developing, testing, and evaluating Multi-Turn RAG systems against the [IBM MT-RAG Benchmark](https://github.com/IBM/MTRAGEval).
 
-- **MTRAG Benchmark Integration**: Official multi-turn RAG evaluation from IBM Research
-- **Multi-Provider LLM Support**: Google Gemini, OpenAI, and local models (Ollama/LM Studio)
-- **BEIR Format Support**: Standard benchmark data format for retrieval tasks
-- **Multi-Turn History**: Proper conversation context handling for chat-based evaluation
-- **Vector Store Options**: FAISS, Chroma, and Pinecone support
-- **Session Management**: Create, rename, and delete chat sessions
+This application provides a Streamlit GUI to experiment with different RAG components (Embedding models, Vector DBs, LLMs, Query Rewriting strategies) and run official benchmark evaluations locally or on a high-performance server.
 
-## Quick Start
+## 📋 Key Features
+
+- **Modular Architecture:** Swap components (OpenAI, Gemini, Local Ollama/HuggingFace) on the fly without restarting.
+- **Multi-Turn Support:** Built-in Query Rewriting and History management to handle context-dependent user queries.
+- **Benchmark Integration:** seamlessly run official **Task A** (Retrieval), **Task B** (Generation), and **Task C** (End-to-End) evaluations.
+- **Local-First Optimization:** Optimized for running with local LLMs (via Ollama) and local Vector DBs (FAISS) to ensure data privacy and zero cost during development.
+- **Batch Ingestion:** One-click ingestion for raw JSONL files or standard MT-RAG corpora (`clapnq`, `cloud`, `fiqa`, `govt`) directly from the `corpora/` directory.
+
+---
+
+## 🛠️ Installation
+
+### Prerequisites
+
+- **Python 3.10+**
+- **[Ollama](https://ollama.com/)** (Required for Local LLM/Embedding strategy)
+- **API Keys** (Optional: OpenAI or Google Gemini if using cloud providers)
+
+### 1. Clone the Repository
 
 ```bash
-# Install dependencies
+git clone <repository_url>
+cd MTRAGEval-Workbench
+2. Set up Virtual Environment
+
+It is recommended to use a virtual environment to manage dependencies.
+
+Bash
+# MacOS/Linux
+python -m venv venv
+source venv/bin/activate
+
+# Windows
+python -m venv venv
+venv\Scripts\activate
+3. Install Dependencies
+
+Bash
 pip install -r requirements.txt
+> Note: If you encounter installation errors related to flash_attn or torch, please install PyTorch compatible with your system first, then re-run the command above.
 
-# Create .env file with your API key
-echo "GOOGLE_API_KEY=your_key_here" > .env
+⚙️ Local Model Setup (Recommended)
+To achieve high scores using local hardware (e.g., MacBook Pro) before deploying to a server, we recommend using Ollama.
 
-# Run Streamlit UI
+Install Ollama from ollama.com.
+
+Pull the models specified in the architecture:
+
+Bash
+# Embedding Model
+ollama pull nomic-embed-text
+
+# LLM (Small but capable for local dev)
+ollama pull qwen2.5:3b
+Ensure the Ollama server is running (ollama serve).
+
+🚀 Usage Guide
+Start the application:
+
+Bash
 streamlit run app.py
+The interface will open at http://localhost:8501.
 
-# Or run CLI benchmark
-python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
-```
+1. 📚 Knowledge Base (Ingestion)
 
-## MTRAG Benchmark
+Before running queries, you must create a Vector Store.
 
-### What is MTRAG?
+Navigate to the Knowledge Base tab.
 
-MTRAG (Multi-Turn RAG) is a comprehensive benchmark dataset from IBM Research for evaluating RAG systems on multi-turn conversations. It includes:
+Configuration:
 
-- **4 Corpora**: ClapNQ, Cloud, FiQA, Govt
-- **842 Evaluation Tasks**: Human-generated multi-turn conversations
-- **3 Task Types**: Retrieval (A), Generation (B), Full RAG (C)
+LLM Provider: Set to Local (or API provider).
 
-### Running Benchmarks
+Embedding: Set to Local (Ollama) -> nomic-embed-text.
 
-#### CLI Mode
+Vector DB: Select FAISS.
 
-```bash
-# Task A: Retrieval Only
-python run_mtrag_benchmark.py --corpus clapnq --task retrieval_taska --top_k 5
+Naming: Enter a suffix in "Knowledge Base Name" (e.g., v1).
 
-# Task B: Generation (with provided contexts)
-python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
+This defines the folder name: vectordb/faiss_db_{corpus}_{v1}.
 
-# Task C: Full RAG Pipeline
-python run_mtrag_benchmark.py --corpus clapnq --task rag_taskc --provider Gemini
-```
+Ingestion:
 
-#### UI Mode
+Select "Choose from MT-RAG Corpora".
 
-1. Open `http://localhost:8501`
-2. Enter API key in sidebar
-3. Go to **📈 MTRAG Benchmark** tab
-4. Select corpus and task type
-5. Click **Run MTRAG Benchmark**
+Select a specific corpus (e.g., clapnq) or "Full Corpora" to process all 4 datasets at once.
 
-### Evaluation Metrics
+Click Ingest. The system automatically unzips, chunks, and indexes the data into vectordb/.
 
-| Task | Metrics |
-|------|---------|
-| **Task A** | Recall@K, nDCG@K |
-| **Task B/C** | Faithfulness, Appropriateness, Completeness, IDK Accuracy |
+2. 💬 Interactive Playground
 
-## Project Structure
+Test your pipeline logic manually.
 
-```
-├── app.py                     # Streamlit UI
-├── run_mtrag_benchmark.py     # CLI benchmark runner
+Navigate to the Interactive Playground tab.
+
+Select a Task:
+
+Task A (Retrieval Only): Upload a query file (e.g., retrieval_taskac_input.jsonl) to see what documents are found.
+
+Task B (Generation): Test the LLM's ability to answer given a specific context.
+
+Task C (End-to-End): Test the full flow: Rewrite Query -> Retrieve -> Generate.
+
+Click Run Pipeline.
+
+Download the generated predictions.jsonl file.
+
+3. 📊 Batch Evaluation
+
+Run the official scoring scripts.
+
+Navigate to the Batch Evaluation tab.
+
+Mode 1: Official Benchmark Run:
+
+Select the corpus and task.
+
+This executes run_mtrag_benchmark.py in the background.
+
+Mode 2: Evaluate Custom Files:
+
+Upload the predictions.jsonl you generated in the Playground.
+
+(For Task A) Select the Ground Truth corpus.
+
+The system calculates metrics like NDCG, Recall, and Faithfulness.
+
+📂 Project Structure
+Plaintext
+.
+├── app.py                 # Main Streamlit Application Entrypoint
+├── app.log                # Runtime logs for debugging
+├── corpora/               # Zipped Datasets (Source of Truth)
+│   ├── document_level/    # Source documents (clapnq, cloud, etc.)
+│   └── passage_level/     # Pre-chunked passages
 ├── src/
-│   ├── ingestion.py           # BEIR + JSON document loading
-│   ├── rag.py                 # RAG chains + multi-turn history
-│   ├── mtrag_evaluator.py     # MTRAG evaluation bridge
-│   ├── llm_client.py          # LLM provider factory
-│   ├── vector_store.py        # Vector DB setup
-│   ├── query_rewrite.py       # Query rewriting
-│   └── evaluation/            # MTRAG official scripts
-├── .env.example               # API key template
-└── requirements.txt
+│   ├── ingestion.py       # JSONL parsing and document chunking
+│   ├── vector_store.py    # FAISS/Chroma logic (saves to /vectordb)
+│   ├── embeddings.py      # Wrapper for Ollama/OpenAI embeddings
+│   ├── rag.py             # LangChain RAG pipeline construction
+│   └── query_rewrite.py   # Multi-turn query rewriting logic
+├── vectordb/              # Location where FAISS indexes are saved
+├── predictions/           # Output folder for generated results
+├── run_mtrag_benchmark.py # CLI Entrypoint for automated benchmarking
+└── requirements.txt       # Project dependencies
+🧪 Evaluation Metrics
+This workbench focuses on three key pillars for the IBM Benchmark:
+
+Faithfulness (F): Answers must be grounded strictly in the retrieved context. Hallucinations are penalized.
+
+Answerability (IDK): The system must correctly identify when the retrieved context is insufficient and output "I do not know" or the specific IDK token.
+
+Contextual Accuracy: For multi-turn conversations, the system must resolve pronouns (e.g., "it", "he") by rewriting the query based on chat history before retrieval.
+
+📝 License
+This project is a workbench for the MTRAG Benchmark. Please refer to the original paper and repository for dataset licensing and citation requirements.
 ```
-
-## Configuration
-
-### Google Gemini (Recommended)
-
-1. Get API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Create `.env` file: `GOOGLE_API_KEY=your_key`
-3. Select **Gemini** as provider in sidebar
-
-### Local Models (Ollama)
-
-```bash
-# Pull a model
-ollama pull llama3
-
-# Configure in app
-# Provider: Local
-# Base URL: http://localhost:11434/v1
-# Model: llama3
-```
-
-## UI Tabs
-
-| Tab | Purpose |
-|-----|---------|
-| 🎯 RAG Playground | Manual RAG testing (Task A/B/C) |
-| 📈 MTRAG Benchmark | Official benchmark evaluation |
-| 💬 Chat | Interactive conversation |
-| 🛠️ Manage Collection | Vector DB document management |
-| 🔍 Database Inspector | View chat history database |
-
-## Key Components
-
-### Multi-Turn History Support
-
-The system properly handles MTRAG's multi-turn conversation format:
-
-```python
-from src.rag import convert_mtrag_history_to_messages
-
-# MTRAG format → LangChain messages
-history, current_question = convert_mtrag_history_to_messages(input_list)
-```
-
-### BEIR Format Loading
-
-```python
-from src.ingestion import load_beir_corpus, load_beir_queries, load_beir_qrels
-
-# Load MTRAG corpus
-docs = load_beir_corpus("path/to/corpus.jsonl")
-queries = load_beir_queries("path/to/queries.jsonl")
-qrels = load_beir_qrels("path/to/qrels/dev.tsv")
-```
-
-## Development
-
-### Adding New Evaluation Metrics
-
-Extend `src/mtrag_evaluator.py` to add custom metrics or integrate additional MTRAG scripts.
-
-### Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| Rate limit errors | Use `--limit` flag or local models |
-| "No vector store loaded" | Upload and process documents first |
-| Import errors | Run `pip install -r requirements.txt` |
-
-## References
-
-- [MTRAG Benchmark](https://github.com/IBM/mt-rag-benchmark) - Official benchmark repository
-- [BEIR Benchmark](https://github.com/beir-cellar/beir) - Information retrieval benchmark format
-- [LangChain](https://python.langchain.com/) - LLM orchestration framework
-
-## License
-
-MIT License
