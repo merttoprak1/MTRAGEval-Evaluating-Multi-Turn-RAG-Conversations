@@ -18,6 +18,7 @@ from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app import logger
+from src.reranker import get_reranker
 import time
 
 PROMPT_TEMPLATES = """
@@ -52,7 +53,9 @@ def run_task_a_retrieval(
     max_workers: int,
     output_filename_prefix: str = "task_a",
     output_dir: str = "predictions/task_a",
-    rewrite_dir: str = "predictions/task_a"
+    rewrite_dir: str = "predictions/task_a",
+    rerank_enabled: bool = False,
+    rerank_top_k: int = 5
 ) -> tuple[str, str]:
     """
     Execute Task A retrieval logic.
@@ -137,7 +140,15 @@ def run_task_a_retrieval(
                     "title": doc.metadata.get("title", "No Title")
                 })
             
-            # D. Construct Output Object
+            # D. Reranking (if enabled)
+            if rerank_enabled and contexts:
+                try:
+                    reranker = get_reranker()
+                    contexts = reranker.rerank(final_query, contexts, top_k=rerank_top_k)
+                except Exception as e:
+                    logger.warning(f"Reranking failed, using original order: {e}")
+            
+            # E. Construct Output Object
             output_obj = {
                 "conversation_id": item.get('conversation_id'),
                 "task_id": item['id'],
@@ -464,6 +475,12 @@ def render():
                 "method": rewrite_method, 
                 "custom_prompt": custom_prompt
             }
+        
+        # --- Reranker Configuration ---
+        with st.expander("🔄 Reranker Configuration", expanded=False):
+            rerank_enabled_a = st.checkbox("Enable Reranking", value=False, key="rerank_enable_a")
+            rerank_top_k_a = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_a", disabled=not rerank_enabled_a)
+            st.caption("ℹ️ Uses BAAI/bge-reranker-base model to re-score retrieved documents.")
 
         uploaded_file = st.file_uploader("Upload Query File (JSONL)", type=["json", "jsonl"], key="task_a_uploader")
         
@@ -506,7 +523,9 @@ def render():
                     max_workers=max_workers,
                     output_filename_prefix="task_a",
                     output_dir="predictions/task_a",
-                    rewrite_dir="predictions/task_a"
+                    rewrite_dir="predictions/task_a",
+                    rerank_enabled=rerank_enabled_a,
+                    rerank_top_k=rerank_top_k_a
                 )
                 
                 progress_bar.progress(1.0)
@@ -654,6 +673,12 @@ def render():
                 "custom_prompt": custom_prompt
             }
         
+        # --- Reranker Configuration ---
+        with st.expander("🔄 Reranker Configuration", expanded=False):
+            rerank_enabled_c = st.checkbox("Enable Reranking", value=False, key="rerank_enable_c")
+            rerank_top_k_c = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_c", disabled=not rerank_enabled_c)
+            st.caption("ℹ️ Uses BAAI/bge-reranker-base model to re-score retrieved documents.")
+        
         # --- Generation Prompt Configuration ---
         with st.expander("🤖 Generation Prompt Configuration", expanded=True):
             gen_prompt_template = st.text_area(
@@ -708,7 +733,9 @@ def render():
                     max_workers=max_workers_retrieval,
                     output_filename_prefix="task_c_retrieval",
                     output_dir="predictions/task_c/retrieval",
-                    rewrite_dir="predictions/task_c/retrieval"
+                    rewrite_dir="predictions/task_c/retrieval",
+                    rerank_enabled=rerank_enabled_c,
+                    rerank_top_k=rerank_top_k_c
                 )
                 
                 progress_bar_retrieval.progress(1.0)
