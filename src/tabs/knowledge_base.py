@@ -18,7 +18,7 @@ def render():
         st.subheader("1. Vector Database & Collection")
         db_existence = st.selectbox("New DB Or Old DB", ["New DB", "Old DB"], index=0)
         collections = os.listdir("collections")
-        if db_existence is "New DB":
+        if db_existence == "New DB":
             vector_db_type = st.selectbox("Vector DB Type", ["FAISS", "Chroma", "Pinecone"], index=0)
             collection_name = st.text_input("Collection Name", value="default", key="collection_name") 
             if collection_name in collections:
@@ -28,7 +28,7 @@ def render():
                 )
                 st.stop()
                 
-        elif db_existence is "Old DB":
+        elif db_existence == "Old DB":
             collection_name = st.selectbox("Select a Collection", collections, index=0)
             file_path = f"collections/{collection_name}/info.json"
             with open(file_path, "r", encoding="utf-8") as f:
@@ -60,7 +60,7 @@ def render():
             models = OPENAI_EMBEDDING_MODELS if embedding_provider == "OpenAI" else GEMINI_EMBEDDING_MODELS
             batch_limits = (1, 2048, 100) if embedding_provider == "OpenAI" else (1, 100, 10)
             embedding_api_key = st.text_input(f"{embedding_provider} Embedding API Key", type="password")
-            if db_existence is "Old DB":
+            if db_existence == "Old DB":
                 st.text_input(
                     "Embedding Model",
                     value=embedding_model_default,
@@ -78,7 +78,7 @@ def render():
             embedding_model_config = {"provider": embedding_provider, "api_key": embedding_api_key, "model_name": embedding_model_default, "dimension": model_info['dim']}
         else:
             embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434", key="kb_embed_base_url")
-            if db_existence is "Old DB":
+            if db_existence == "Old DB":
                 st.text_input(
                     "Embedding Model",
                     value=embedding_model_default,
