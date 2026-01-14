@@ -53,9 +53,6 @@ def run_task_a_retrieval(
     output_filename_prefix: str = "task_a",
     output_dir: str = "predictions/task_a",
     rewrite_dir: str = "predictions/task_a"
-    output_filename_prefix: str = "task_a",
-    output_dir: str = "predictions/task_a",
-    rewrite_dir: str = "predictions/task_a"
 ) -> tuple[str, str]:
     """
     Execute Task A retrieval logic.
