@@ -14,6 +14,8 @@ def render():
     embedding_config = {}
     vd_config = {}
     collection_infos = {"embedding" : {}, "collection" : {}}
+    vector_db_type = "FAISS"
+    collection_name = "default"
     with kb_col1:
         st.subheader("1. Vector Database & Collection")
         db_existence = st.selectbox("New DB Or Old DB", ["New DB", "Old DB"], index=0)

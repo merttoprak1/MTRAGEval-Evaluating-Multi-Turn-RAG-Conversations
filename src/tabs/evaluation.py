@@ -172,22 +172,9 @@ def render():
         with col_sel2:
             # --- TASK A INPUTS ---
             if selected_category == "Task A":
-                st.info("Task A requires a **Predictions File** + **Ground Truth (BEIR)**.")
+                st.info("Task A requires a **Retrieval Predictions File (.jsonl)**. The Ground Truth (Qrels) will be automatically selected based on the 'Collection' field in your file.")
                 
-                # 1. Select Ground Truth Source
-                selected_corpus = st.selectbox("Select Ground Truth Corpus (for Qrels)", AVAILABLE_CORPORA)
-                selected_query_type = st.selectbox("Query Type", list(QUERY_TYPES.keys()), format_func=lambda x: QUERY_TYPES[x])
-                
-                # Load BEIR Data
-                try:
-                    paths = get_retrieval_task_paths(selected_corpus, selected_query_type)
-                    beir_qrels = load_qrels(paths["qrels"])
-                    beir_queries = load_queries(paths["queries"])
-                    st.caption(f"Loaded: {len(beir_queries)} queries, {len(beir_qrels)} relevance sets.")
-                except Exception as e:
-                    st.error(f"Failed to load BEIR data: {e}")
-
-                # 2. Upload Predictions
+                # Upload Predictions
                 task_a_file = st.file_uploader("Upload Retrieval Predictions (.jsonl)", type=["json", "jsonl"])
                 if task_a_file:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
@@ -214,18 +201,18 @@ def render():
         
         is_ready = False
         if selected_category == "Task A":
-            is_ready = (eval_dataset_path is not None and beir_qrels is not None)
+            is_ready = (eval_dataset_path is not None)
         else:
             is_ready = (eval_dataset_path is not None)
 
         
-            if not is_ready:
-                if selected_category == "Task A":
-                    st.warning("Please select a valid corpus with queries and qrels.")
-                else:
-                    st.warning("Please upload a file to evaluate.")
+        if not is_ready:
+            if selected_category == "Task A":
+                st.warning("Please upload a predictions file to evaluate.")
             else:
-                with st.spinner("Running evaluation..."):
+                st.warning("Please upload a file to evaluate.")
+        else:
+            with st.spinner("Running evaluation..."):
                     import time
                     eval_start = time.time()
                 
@@ -239,10 +226,8 @@ def render():
                         
                         st.info(f"""
                         **Evaluation Configuration:**
-                        - Corpus: **{selected_corpus.upper()}**
-                        - Query Type: **{QUERY_TYPES[selected_query_type]}**
-                        - Total Queries: **{len(beir_queries)}**
-                        - Queries with Relevance Judgments: **{len(beir_qrels)}**
+                        - Corpus: **Auto-Detected**
+                        - Query Type: **All Questions**
                         """)
                         
                         task_a_predictions_path = eval_dataset_path 
@@ -261,11 +246,13 @@ def render():
                                 st.write("📊 Running official MTRAG retrieval evaluation...")
                                 
                                 try:
+                                    # Get project root (parent of src/tabs/)
+                                    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                                     result = subprocess.run(
                                         run_retrieval_eval_command, 
                                         capture_output=True, 
                                         text=True,
-                                        cwd=os.path.dirname(os.path.abspath(__file__)))                                
+                                        cwd=project_root)                                
                                     if result.returncode == 0:
                                         status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
                                         
@@ -273,7 +260,7 @@ def render():
                                             st.subheader("📈 Retrieval Metrics")
                                             st.code(result.stdout)
                                         
-                                        aggregate_csv = output_path.replace("_results.jsonl", "_results_aggregate.csv")
+                                        aggregate_csv = os.path.splitext(output_path)[0] + "_aggregate.csv"
                                         if os.path.exists(aggregate_csv):
                                             st.subheader("📋 Aggregate Results")
                                             df_agg = pd.read_csv(aggregate_csv)
