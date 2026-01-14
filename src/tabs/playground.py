@@ -120,8 +120,9 @@ def run_task_a_retrieval(
             # B. Get vector store and Retrieve
             vector_store_instance, local_col = get_vector_store_for_collection(item['collection'])
             if vector_store_instance is None:
-                logger.error(f"No vector store for collection {item['collection']}")
-                return None
+                # Return error dict
+                return {"error": f"No vector store for collection {item['collection']}"}
+            
             docs_with_scores = vector_store_instance.similarity_search_with_score(final_query, k=task_a_top_k)
             
             # C. Format Contexts
@@ -149,21 +150,22 @@ def run_task_a_retrieval(
             return json.dumps(output_obj)
         
         except Exception as e:
-            logger.error(f"Error processing {item.get('id', 'unknown')}: {e}")
-            return None
+            # Capture specific error info
+            return {"error": str(e), "type": type(e).__name__}
     
     # Parse input file
     items_to_process = []
     with open(input_file_path, 'r', encoding='utf-8') as f:
         for line_idx, line in enumerate(f):
             if not line.strip(): continue
-            data = json.loads(line)
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             
             # Parse MTRAG format only
-            if "input" in data and isinstance(data["input"], list):
+            if "input" in data and isinstance(data["input"], list) and data["input"]:
                 conv = data["input"]
-                if not conv: continue
-                
                 parsed_item = {
                     "id": data.get("task_id", f"line_{line_idx}"),
                     "conversation_id": data.get("conversation_id", ""),
@@ -177,18 +179,45 @@ def run_task_a_retrieval(
                 }
                 items_to_process.append(parsed_item)
             else:
-                logger.warning(f"Skipping line {line_idx}: not in MTRAG format")
+                pass # Skip non-MTRAG lines silently or log warning if needed? 
+                # Original logged warning, let's keep it clean or just skip.
+                # The user verified their file is MTRAG, so clean skip is fine or warning.
+                # Original had warning.
+                # logger.warning(f"Skipping line {line_idx}: not in MTRAG format")
     
+    if not items_to_process:
+        logger.warning(f"No valid items found in {input_file_path}")
+        return "", ""
+
     # Parallel execution
     results_buffer = []
+    errors_encountered = []
+    
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_item = {executor.submit(process_single_item, item): item for item in items_to_process}
         
         for future in concurrent.futures.as_completed(future_to_item):
-            result = future.result()
-            if result:
-                results_buffer.append(result)
-    
+            try:
+                result = future.result()
+                if isinstance(result, dict) and "error" in result:
+                     errors_encountered.append(result["error"])
+                elif result:
+                    results_buffer.append(result)
+            except Exception as e:
+                errors_encountered.append(str(e))
+                
+    # Report errors to UI if significant failed
+    if errors_encountered:
+        unique_errors = list(set(errors_encountered))
+        error_msg = f"Encountered {len(errors_encountered)} errors during processing. Unique errors: {unique_errors[:3]}"
+        logger.error(error_msg)
+        # We can't use st.error here directly easily if it's running in background, 
+        # but since this function is blocked on compatible with st, we can.
+        # But for better separation, let's just log it and maybe the caller handles it? 
+        # The caller (render) doesn't see this return.
+        # Let's print to streamlit here since we are inside the app flow.
+        st.error(error_msg)
+
     # Save predictions
     predictions_dir = "predictions"
     os.makedirs(predictions_dir, exist_ok=True)
@@ -197,10 +226,16 @@ def run_task_a_retrieval(
     save_filename = f"{output_filename_prefix}_multi_{timestamp}.jsonl"
     save_path = os.path.join(predictions_dir, save_filename)
     
-    final_jsonl = "\n".join(results_buffer)
-    with open(save_path, "w", encoding="utf-8") as f:
-        f.write(final_jsonl)
-    
+    if results_buffer:
+        final_jsonl = "\n".join(results_buffer)
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(final_jsonl)
+    else:
+        # Save empty file or hint?
+        # Better to save an error note or just empty
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write("")
+
     # Save rewrite queries
     rewrite_dir = "query_rewrite_files"
     os.makedirs(rewrite_dir, exist_ok=True)
@@ -209,12 +244,15 @@ def run_task_a_retrieval(
     
     with open(rewrite_path, "w") as outfile:
         for line in results_buffer:
-            line_data = json.loads(line)
-            new_data = {
-                "_id": line_data["task_id"],
-                "text": line_data["rewritten_query"]
-            }
-            outfile.write(json.dumps(new_data) + "\n")
+            try:
+                line_data = json.loads(line)
+                new_data = {
+                    "_id": line_data["task_id"],
+                    "text": line_data["rewritten_query"]
+                }
+                outfile.write(json.dumps(new_data) + "\n")
+            except:
+                pass
     
     return save_path, rewrite_path
 
