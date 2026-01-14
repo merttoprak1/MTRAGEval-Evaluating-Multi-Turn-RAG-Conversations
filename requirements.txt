@@ -19,7 +19,7 @@ pytrec-eval-terrier==0.5.10
 ragas==0.3.3
 rouge-score==0.1.2
 sentencepiece==0.2.0
-sentence-transformers>=2.2.0
+flashrank>=0.2.0
 streamlit==1.52.2
 tqdm==4.67.1
 # flash_attn==2.8.3

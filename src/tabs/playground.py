@@ -144,7 +144,13 @@ def run_task_a_retrieval(
             if rerank_enabled and contexts:
                 try:
                     reranker = get_reranker()
+                    logger.info(f"Reranking {len(contexts)} documents with top_k={rerank_top_k}")
                     contexts = reranker.rerank(final_query, contexts, top_k=rerank_top_k)
+                    # Log sample rerank score to verify it was added
+                    if contexts and 'rerank_score' in contexts[0]:
+                        logger.info(f"Reranking successful. Sample score: {contexts[0].get('rerank_score')}")
+                    else:
+                        logger.warning("Reranking completed but no rerank_score found in contexts")
                 except Exception as e:
                     logger.warning(f"Reranking failed, using original order: {e}")
             
@@ -159,6 +165,7 @@ def run_task_a_retrieval(
                 "contexts": contexts,
                 "input": item['original_input_obj'],
                 "rewritten_query": final_query,
+                "rerank_enabled": rerank_enabled
             }
             return json.dumps(output_obj)
         

@@ -1,7 +1,7 @@
 """
 Reranker module for improving retrieval quality.
 
-Uses cross-encoder models to rerank retrieved documents based on query relevance.
+Uses FlashRank for fast, lightweight reranking of retrieved documents.
 """
 
 import logging
@@ -13,39 +13,42 @@ logger = logging.getLogger(__name__)
 _reranker_cache: dict = {}
 
 
-class BGEReranker:
+class FlashRanker:
     """
-    Reranker using BAAI/bge-reranker-base model.
+    Reranker using FlashRank library.
     
-    This cross-encoder model scores (query, document) pairs and provides
-    more accurate relevance scores than embedding similarity.
+    FlashRank is a lightweight, fast reranking library that uses ONNX
+    for efficient CPU inference without requiring PyTorch.
     """
     
-    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
+    def __init__(self, model_name: str = "ms-marco-MiniLM-L-12-v2"):
         """
         Initialize the reranker.
         
         Args:
-            model_name: HuggingFace model name for the cross-encoder
+            model_name: FlashRank model name. Options include:
+                - "ms-marco-MiniLM-L-12-v2" (default, good balance)
+                - "ms-marco-TinyBERT-L-2-v2" (faster, smaller)
+                - "rank-T5-flan" (larger, higher quality)
         """
         self.model_name = model_name
         self.model = None
         self._load_model()
     
     def _load_model(self):
-        """Load the cross-encoder model."""
+        """Load the FlashRank model."""
         try:
-            from sentence_transformers import CrossEncoder
+            from flashrank import Ranker
             
-            logger.info(f"Loading reranker model: {self.model_name}")
-            self.model = CrossEncoder(self.model_name)
-            logger.info("Reranker model loaded successfully")
+            logger.info(f"Loading FlashRank model: {self.model_name}")
+            self.model = Ranker(model_name=self.model_name)
+            logger.info("FlashRank model loaded successfully")
             
         except ImportError:
-            logger.error("sentence-transformers not installed. Run: pip install sentence-transformers")
-            raise ImportError("Please install sentence-transformers: pip install sentence-transformers")
+            logger.error("flashrank not installed. Run: pip install flashrank")
+            raise ImportError("Please install flashrank: pip install flashrank")
         except Exception as e:
-            logger.error(f"Failed to load reranker model: {e}")
+            logger.error(f"Failed to load FlashRank model: {e}")
             raise
     
     def rerank(
@@ -71,19 +74,30 @@ class BGEReranker:
             return documents
         
         if self.model is None:
-            logger.warning("Reranker model not loaded, returning original order")
+            logger.warning("FlashRank model not loaded, returning original order")
             return documents
         
-        # Create (query, document_text) pairs for scoring
-        pairs = [(query, doc.get("text", "")) for doc in documents]
-        
         try:
-            # Get relevance scores from cross-encoder
-            scores = self.model.predict(pairs)
+            from flashrank import RerankRequest
             
-            # Attach scores to documents
-            for doc, score in zip(documents, scores):
-                doc[score_field] = float(score)
+            # Create passages for FlashRank
+            passages = [
+                {"id": i, "text": doc.get("text", "")}
+                for i, doc in enumerate(documents)
+            ]
+            
+            # Create rerank request
+            rerank_request = RerankRequest(query=query, passages=passages)
+            
+            # Get reranked results
+            results = self.model.rerank(rerank_request)
+            
+            # Create a mapping from id to rerank score
+            score_map = {r["id"]: r["score"] for r in results}
+            
+            # Attach scores to original documents
+            for i, doc in enumerate(documents):
+                doc[score_field] = float(score_map.get(i, 0.0))
             
             # Sort by rerank score (descending - higher is more relevant)
             reranked = sorted(documents, key=lambda x: x.get(score_field, 0), reverse=True)
@@ -100,21 +114,21 @@ class BGEReranker:
             return documents
 
 
-def get_reranker(model_name: str = "BAAI/bge-reranker-base") -> BGEReranker:
+def get_reranker(model_name: str = "ms-marco-MiniLM-L-12-v2") -> FlashRanker:
     """
     Get a cached reranker instance.
     
     Uses a global cache to avoid reloading the model on every call.
     
     Args:
-        model_name: HuggingFace model name
+        model_name: FlashRank model name
     
     Returns:
-        BGEReranker instance
+        FlashRanker instance
     """
     global _reranker_cache
     
     if model_name not in _reranker_cache:
-        _reranker_cache[model_name] = BGEReranker(model_name)
+        _reranker_cache[model_name] = FlashRanker(model_name)
     
     return _reranker_cache[model_name]
