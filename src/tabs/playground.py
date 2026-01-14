@@ -50,7 +50,9 @@ def run_task_a_retrieval(
     llm_for_rewrite,
     task_a_top_k: int,
     max_workers: int,
-    output_filename_prefix: str = "task_a"
+    output_filename_prefix: str = "task_a",
+    output_dir: str = "predictions/task_a",
+    rewrite_dir: str = "predictions/task_a"
 ) -> tuple[str, str]:
     """
     Execute Task A retrieval logic.
@@ -219,12 +221,11 @@ def run_task_a_retrieval(
         st.error(error_msg)
 
     # Save predictions
-    predictions_dir = "predictions"
-    os.makedirs(predictions_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     save_filename = f"{output_filename_prefix}_multi_{timestamp}.jsonl"
-    save_path = os.path.join(predictions_dir, save_filename)
+    save_path = os.path.join(output_dir, save_filename)
     
     if results_buffer:
         final_jsonl = "\n".join(results_buffer)
@@ -237,7 +238,6 @@ def run_task_a_retrieval(
             f.write("")
 
     # Save rewrite queries
-    rewrite_dir = "query_rewrite_files"
     os.makedirs(rewrite_dir, exist_ok=True)
     rewrite_filename = f"{output_filename_prefix}_rewrite_{timestamp}.jsonl"
     rewrite_path = os.path.join(rewrite_dir, rewrite_filename)
@@ -262,7 +262,8 @@ def run_task_b_generation(
     gen_prompt_template: str,
     llm,
     max_workers: int,
-    output_filename_prefix: str = "task_b"
+    output_filename_prefix: str = "task_b",
+    output_dir: str = "predictions/task_b"
 ) -> str:
     """
     Execute Task B generation logic.
@@ -339,12 +340,11 @@ def run_task_b_generation(
                 task_b_output.append(result)
     
     # Save output
-    predictions_dir = "predictions/generation"
-    os.makedirs(predictions_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     save_filename = f"{output_filename_prefix}_{timestamp}.jsonl"
-    save_path = os.path.join(predictions_dir, save_filename)
+    save_path = os.path.join(output_dir, save_filename)
 
     with open(save_path, "w", encoding="utf-8") as f:
         f.write("\n".join(task_b_output))
@@ -504,7 +504,9 @@ def render():
                     llm_for_rewrite=llm_for_rewrite,
                     task_a_top_k=task_a_top_k,
                     max_workers=max_workers,
-                    output_filename_prefix="task_a"
+                    output_filename_prefix="task_a",
+                    output_dir="predictions/task_a",
+                    rewrite_dir="predictions/task_a"
                 )
                 
                 progress_bar.progress(1.0)
@@ -579,7 +581,8 @@ def render():
                     gen_prompt_template=gen_prompt_template,
                     llm=llm,
                     max_workers=max_workers,
-                    output_filename_prefix=f"task_b_{uploaded_file.name.split('.')[0]}"
+                    output_filename_prefix=f"task_b_{uploaded_file.name.split('.')[0]}",
+                    output_dir="predictions/task_b"
                 )
                 
                 progress_bar.progress(1.0)
@@ -703,7 +706,11 @@ def render():
                     llm_for_rewrite=llm_for_rewrite,
                     task_a_top_k=task_c_top_k,
                     max_workers=max_workers_retrieval,
-                    output_filename_prefix="task_c_retrieval"
+                    task_a_top_k=task_c_top_k,
+                    max_workers=max_workers_retrieval,
+                    output_filename_prefix="task_c_retrieval",
+                    output_dir="predictions/task_c/retrieval",
+                    rewrite_dir="predictions/task_c/retrieval"
                 )
                 
                 progress_bar_retrieval.progress(1.0)
@@ -727,7 +734,10 @@ def render():
                     gen_prompt_template=gen_prompt_template,
                     llm=llm,
                     max_workers=max_workers_generation,
-                    output_filename_prefix=f"task_c_{uploaded_file.name.split('.')[0]}"
+                    llm=llm,
+                    max_workers=max_workers_generation,
+                    output_filename_prefix=f"task_c_{uploaded_file.name.split('.')[0]}",
+                    output_dir="predictions/task_c/generation"
                 )
                 
                 progress_bar_generation.progress(1.0)
