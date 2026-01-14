@@ -9,6 +9,7 @@ import sys
 import json
 import concurrent.futures
 from pathlib import Path
+from datetime import datetime
 from src.ingestion import load_json_documents, load_beir_queries
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
 from src.llm_client import get_llm
@@ -177,20 +178,44 @@ def render():
                 # Upload Predictions
                 task_a_file = st.file_uploader("Upload Retrieval Predictions (.jsonl)", type=["json", "jsonl"])
                 if task_a_file:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
-                        tmp.write(task_a_file.getvalue())
-                        eval_dataset_path = tmp.name
-                    st.success(f"Loaded {task_a_file.name}")
+                    # Save to persistent uploads folder
+                    uploads_dir = Path("predictions/task_a")
+                    uploads_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"{timestamp}_{task_a_file.name}"
+                    file_path = uploads_dir / filename
+                    
+                    with open(file_path, "wb") as f:
+                        f.write(task_a_file.getvalue())
+                    
+                    eval_dataset_path = str(file_path.absolute())
+                    st.success(f"Saved to {eval_dataset_path}")
 
             # --- TASK B/C INPUTS ---
             else:
                 st.info("Task B/C requires a **Test Dataset** (Input + Ground Truth).")
                 eval_dataset = st.file_uploader("Upload Test Dataset (.jsonl)", type=["json", "jsonl"])
                 if eval_dataset:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl") as tmp:
-                        tmp.write(eval_dataset.getvalue())
-                        eval_dataset_path = tmp.name
-                    st.success(f"Loaded {eval_dataset.name}")
+                    # Save to specific folder based on task
+                    if selected_category == "Task B":
+                         uploads_dir = Path("predictions/task_b")
+                    elif selected_category == "Task C":
+                         uploads_dir = Path("predictions/task_c")
+                    else:
+                         uploads_dir = Path("predictions/others") # Fallback
+
+                    uploads_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"{timestamp}_{eval_dataset.name}"
+                    file_path = uploads_dir / filename
+                    
+                    with open(file_path, "wb") as f:
+                        f.write(eval_dataset.getvalue())
+                    
+                    eval_dataset_path = str(file_path.absolute())
+                    st.success(f"Saved to {eval_dataset_path}")
                     
                     # Judge Settings
                     judge_provider = st.selectbox("LLM-as-a-Judge", ["ibm-granite/granite-3.3-8b-instruct", "Custom"])
