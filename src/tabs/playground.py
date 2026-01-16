@@ -18,7 +18,7 @@ from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app import logger
-from src.reranker import get_reranker
+from src.reranker import get_reranker, RERANKER_TYPES, FLASHRANK_MODELS, BGE_MODELS
 import time
 
 PROMPT_TEMPLATES = """
@@ -55,7 +55,9 @@ def run_task_a_retrieval(
     output_dir: str = "predictions/task_a",
     rewrite_dir: str = "predictions/task_a",
     rerank_enabled: bool = False,
-    rerank_top_k: int = 5
+    rerank_top_k: int = 5,
+    reranker_type: str = "flashrank",
+    reranker_model: str = None
 ) -> tuple[str, str]:
     """
     Execute Task A retrieval logic.
@@ -143,8 +145,8 @@ def run_task_a_retrieval(
             # D. Reranking (if enabled)
             if rerank_enabled and contexts:
                 try:
-                    reranker = get_reranker()
-                    logger.info(f"Reranking {len(contexts)} documents with top_k={rerank_top_k}")
+                    reranker = get_reranker(reranker_type=reranker_type, model_name=reranker_model)
+                    logger.info(f"Reranking {len(contexts)} documents with {reranker_type}:{reranker_model}, top_k={rerank_top_k}")
                     contexts = reranker.rerank(final_query, contexts, top_k=rerank_top_k)
                     # Log sample rerank score to verify it was added
                     if contexts and 'rerank_score' in contexts[0]:
@@ -486,8 +488,37 @@ def render():
         # --- Reranker Configuration ---
         with st.expander("🔄 Reranker Configuration", expanded=False):
             rerank_enabled_a = st.checkbox("Enable Reranking", value=False, key="rerank_enable_a")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                reranker_type_a = st.selectbox(
+                    "Reranker Type",
+                    options=list(RERANKER_TYPES.keys()),
+                    format_func=lambda x: RERANKER_TYPES[x],
+                    key="reranker_type_a",
+                    disabled=not rerank_enabled_a
+                )
+            with col2:
+                # Show model options based on selected reranker type
+                if reranker_type_a == "flashrank":
+                    model_options = FLASHRANK_MODELS
+                else:
+                    model_options = BGE_MODELS
+                
+                reranker_model_a = st.selectbox(
+                    "Reranker Model",
+                    options=list(model_options.keys()),
+                    format_func=lambda x: model_options[x],
+                    key="reranker_model_a",
+                    disabled=not rerank_enabled_a
+                )
+            
             rerank_top_k_a = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_a", disabled=not rerank_enabled_a)
-            st.caption("ℹ️ Uses BAAI/bge-reranker-base model to re-score retrieved documents.")
+            
+            if reranker_type_a == "bge":
+                st.warning("⚠️ BGE requires sentence-transformers and PyTorch. Make sure they are installed.")
+            else:
+                st.caption("ℹ️ FlashRank is lightweight and fast, uses ONNX for CPU inference.")
 
         uploaded_file = st.file_uploader("Upload Query File (JSONL)", type=["json", "jsonl"], key="task_a_uploader")
         
@@ -532,7 +563,9 @@ def render():
                     output_dir="predictions/task_a",
                     rewrite_dir="predictions/task_a",
                     rerank_enabled=rerank_enabled_a,
-                    rerank_top_k=rerank_top_k_a
+                    rerank_top_k=rerank_top_k_a,
+                    reranker_type=reranker_type_a,
+                    reranker_model=reranker_model_a
                 )
                 
                 progress_bar.progress(1.0)
@@ -683,8 +716,37 @@ def render():
         # --- Reranker Configuration ---
         with st.expander("🔄 Reranker Configuration", expanded=False):
             rerank_enabled_c = st.checkbox("Enable Reranking", value=False, key="rerank_enable_c")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                reranker_type_c = st.selectbox(
+                    "Reranker Type",
+                    options=list(RERANKER_TYPES.keys()),
+                    format_func=lambda x: RERANKER_TYPES[x],
+                    key="reranker_type_c",
+                    disabled=not rerank_enabled_c
+                )
+            with col2:
+                # Show model options based on selected reranker type
+                if reranker_type_c == "flashrank":
+                    model_options_c = FLASHRANK_MODELS
+                else:
+                    model_options_c = BGE_MODELS
+                
+                reranker_model_c = st.selectbox(
+                    "Reranker Model",
+                    options=list(model_options_c.keys()),
+                    format_func=lambda x: model_options_c[x],
+                    key="reranker_model_c",
+                    disabled=not rerank_enabled_c
+                )
+            
             rerank_top_k_c = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_c", disabled=not rerank_enabled_c)
-            st.caption("ℹ️ Uses BAAI/bge-reranker-base model to re-score retrieved documents.")
+            
+            if reranker_type_c == "bge":
+                st.warning("⚠️ BGE requires sentence-transformers and PyTorch. Make sure they are installed.")
+            else:
+                st.caption("ℹ️ FlashRank is lightweight and fast, uses ONNX for CPU inference.")
         
         # --- Generation Prompt Configuration ---
         with st.expander("🤖 Generation Prompt Configuration", expanded=True):
@@ -742,7 +804,9 @@ def render():
                     output_dir="predictions/task_c/retrieval",
                     rewrite_dir="predictions/task_c/retrieval",
                     rerank_enabled=rerank_enabled_c,
-                    rerank_top_k=rerank_top_k_c
+                    rerank_top_k=rerank_top_k_c,
+                    reranker_type=reranker_type_c,
+                    reranker_model=reranker_model_c
                 )
                 
                 progress_bar_retrieval.progress(1.0)

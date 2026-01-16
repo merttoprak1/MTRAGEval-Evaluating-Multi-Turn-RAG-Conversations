@@ -1,19 +1,55 @@
 """
 Reranker module for improving retrieval quality.
 
-Uses FlashRank for fast, lightweight reranking of retrieved documents.
+Supports multiple reranker backends:
+- FlashRank: Lightweight, fast, ONNX-based (no PyTorch required)
+- BGE: Higher quality, requires sentence-transformers/PyTorch
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Protocol
+from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
-# Global cache for reranker model to avoid reloading on every query
+# Global cache for reranker models to avoid reloading
 _reranker_cache: dict = {}
 
+# Available reranker types
+RERANKER_TYPES = {
+    "flashrank": "FlashRank (Lightweight, Fast)",
+    "bge": "BGE Reranker (Higher Quality, Requires PyTorch)"
+}
 
-class FlashRanker:
+FLASHRANK_MODELS = {
+    "ms-marco-MiniLM-L-12-v2": "MiniLM-L12 (Default, Good Balance)",
+    "ms-marco-TinyBERT-L-2-v2": "TinyBERT-L2 (Faster, Smaller)",
+    "rank-T5-flan": "T5-Flan (Larger, Higher Quality)"
+}
+
+BGE_MODELS = {
+    "BAAI/bge-reranker-base": "BGE Base (Default)",
+    "BAAI/bge-reranker-large": "BGE Large (Higher Quality)",
+    "BAAI/bge-reranker-v2-m3": "BGE v2 M3 (Multilingual)"
+}
+
+
+class BaseReranker(ABC):
+    """Abstract base class for rerankers."""
+    
+    @abstractmethod
+    def rerank(
+        self, 
+        query: str, 
+        documents: list[dict], 
+        top_k: Optional[int] = None,
+        score_field: str = "rerank_score"
+    ) -> list[dict]:
+        """Rerank documents based on query relevance."""
+        pass
+
+
+class FlashRanker(BaseReranker):
     """
     Reranker using FlashRank library.
     
@@ -22,15 +58,6 @@ class FlashRanker:
     """
     
     def __init__(self, model_name: str = "ms-marco-MiniLM-L-12-v2"):
-        """
-        Initialize the reranker.
-        
-        Args:
-            model_name: FlashRank model name. Options include:
-                - "ms-marco-MiniLM-L-12-v2" (default, good balance)
-                - "ms-marco-TinyBERT-L-2-v2" (faster, smaller)
-                - "rank-T5-flan" (larger, higher quality)
-        """
         self.model_name = model_name
         self.model = None
         self._load_model()
@@ -58,18 +85,7 @@ class FlashRanker:
         top_k: Optional[int] = None,
         score_field: str = "rerank_score"
     ) -> list[dict]:
-        """
-        Rerank documents based on query relevance.
-        
-        Args:
-            query: The search query
-            documents: List of dicts, each must have a 'text' field
-            top_k: Number of top documents to return (None = return all, reordered)
-            score_field: Field name to store the rerank score
-        
-        Returns:
-            List of documents sorted by relevance, with rerank scores added
-        """
+        """Rerank documents based on query relevance."""
         if not documents:
             return documents
         
@@ -109,26 +125,110 @@ class FlashRanker:
             return reranked
             
         except Exception as e:
-            logger.error(f"Reranking failed: {e}")
-            # Return original order on failure
+            logger.error(f"FlashRank reranking failed: {e}")
             return documents
 
 
-def get_reranker(model_name: str = "ms-marco-MiniLM-L-12-v2") -> FlashRanker:
+class BGEReranker(BaseReranker):
+    """
+    Reranker using BGE (BAAI) cross-encoder models.
+    
+    Uses sentence-transformers CrossEncoder for high-quality reranking.
+    Requires PyTorch and sentence-transformers.
+    """
+    
+    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
+        self.model_name = model_name
+        self.model = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Load the BGE cross-encoder model."""
+        try:
+            from sentence_transformers import CrossEncoder
+            
+            logger.info(f"Loading BGE model: {self.model_name}")
+            self.model = CrossEncoder(self.model_name)
+            logger.info("BGE model loaded successfully")
+            
+        except ImportError:
+            logger.error("sentence-transformers not installed. Run: pip install sentence-transformers")
+            raise ImportError("Please install sentence-transformers: pip install sentence-transformers")
+        except Exception as e:
+            logger.error(f"Failed to load BGE model: {e}")
+            raise
+    
+    def rerank(
+        self, 
+        query: str, 
+        documents: list[dict], 
+        top_k: Optional[int] = None,
+        score_field: str = "rerank_score"
+    ) -> list[dict]:
+        """Rerank documents based on query relevance."""
+        if not documents:
+            return documents
+        
+        if self.model is None:
+            logger.warning("BGE model not loaded, returning original order")
+            return documents
+        
+        try:
+            # Create (query, document_text) pairs for scoring
+            pairs = [(query, doc.get("text", "")) for doc in documents]
+            
+            # Get relevance scores from cross-encoder
+            scores = self.model.predict(pairs)
+            
+            # Attach scores to documents
+            for doc, score in zip(documents, scores):
+                doc[score_field] = float(score)
+            
+            # Sort by rerank score (descending - higher is more relevant)
+            reranked = sorted(documents, key=lambda x: x.get(score_field, 0), reverse=True)
+            
+            # Return top_k if specified
+            if top_k is not None and top_k > 0:
+                return reranked[:top_k]
+            
+            return reranked
+            
+        except Exception as e:
+            logger.error(f"BGE reranking failed: {e}")
+            return documents
+
+
+def get_reranker(
+    reranker_type: str = "flashrank",
+    model_name: Optional[str] = None
+) -> BaseReranker:
     """
     Get a cached reranker instance.
     
-    Uses a global cache to avoid reloading the model on every call.
-    
     Args:
-        model_name: FlashRank model name
+        reranker_type: "flashrank" or "bge"
+        model_name: Optional model name. If None, uses default for the type.
     
     Returns:
-        FlashRanker instance
+        Reranker instance
     """
     global _reranker_cache
     
-    if model_name not in _reranker_cache:
-        _reranker_cache[model_name] = FlashRanker(model_name)
+    # Set default model names
+    if model_name is None:
+        if reranker_type == "flashrank":
+            model_name = "ms-marco-MiniLM-L-12-v2"
+        else:
+            model_name = "BAAI/bge-reranker-base"
     
-    return _reranker_cache[model_name]
+    cache_key = f"{reranker_type}:{model_name}"
+    
+    if cache_key not in _reranker_cache:
+        if reranker_type == "flashrank":
+            _reranker_cache[cache_key] = FlashRanker(model_name)
+        elif reranker_type == "bge":
+            _reranker_cache[cache_key] = BGEReranker(model_name)
+        else:
+            raise ValueError(f"Unknown reranker type: {reranker_type}. Use 'flashrank' or 'bge'.")
+    
+    return _reranker_cache[cache_key]
