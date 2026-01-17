@@ -8,7 +8,5 @@ faiss_db_*/
 venv
 .venv
 .DS_Store
-qdrant_data/
 input/
-*.jsonl
-*.zip
+corpora/
