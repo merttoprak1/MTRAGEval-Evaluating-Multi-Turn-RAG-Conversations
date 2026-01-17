@@ -15,6 +15,7 @@ from src.llm_client import get_llm
 from src.rag import create_rag_chain
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_REWRITE_PROMPT
 from src.file_manager import FileManager
+from src.filename_utils import generate_prediction_filename, generate_taskc_generation_filename
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -40,10 +41,6 @@ Answer the user's question now using the retrieved context.
 
 """
 
-# ============================================================================
-# MODULAR TASK FUNCTIONS
-# ============================================================================
-
 def run_task_a_retrieval(
     input_file_path: str,
     active_collections: list,
@@ -58,13 +55,16 @@ def run_task_a_retrieval(
     rerank_enabled: bool = False,
     rerank_top_k: int = 5,
     reranker_type: str = "flashrank",
-    reranker_model: str = None
-) -> tuple[str, str]:
+    reranker_model: str = None,
+    vector_db_type: str = None,
+    embedding_model: str = None,
+    global_llm_name: str = None
+) -> str:
     """
     Execute Task A retrieval logic.
     
     Returns:
-        tuple: (predictions_path, rewrite_path) - paths to saved output files
+        str: Path to saved predictions file
     """
     # Collection mapping helper
     def map_collection_target(input_collection_name: str) -> dict:
@@ -278,18 +278,25 @@ def run_task_a_retrieval(
         unique_errors = list(set(errors_encountered))
         error_msg = f"Encountered {len(errors_encountered)} errors during processing. Unique errors: {unique_errors[:3]}"
         logger.error(error_msg)
-        # We can't use st.error here directly easily if it's running in background, 
-        # but since this function is blocked on compatible with st, we can.
-        # But for better separation, let's just log it and maybe the caller handles it? 
-        # The caller (render) doesn't see this return.
-        # Let's print to streamlit here since we are inside the app flow.
         st.error(error_msg)
 
     # Save predictions
     os.makedirs(output_dir, exist_ok=True)
     
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_filename = f"{output_filename_prefix}_multi_{timestamp}.jsonl"
+    filename_base = generate_prediction_filename(
+        task_type=output_filename_prefix,
+        timestamp=timestamp,
+        vector_db_type=vector_db_type,
+        embedding_model=embedding_model,
+        top_k=task_a_top_k,
+        has_reranker=rerank_enabled,
+        reranker_model=reranker_model if rerank_enabled else None,
+        top_k_reranker=rerank_top_k if rerank_enabled else None,
+        global_llm_name=global_llm_name,
+        query_rewritten=rw_config.get("enabled", False)
+    )
+    save_filename = f"{filename_base}.jsonl"
     save_path = os.path.join(output_dir, save_filename)
     
     if results_buffer:
@@ -301,25 +308,8 @@ def run_task_a_retrieval(
         # Better to save an error note or just empty
         with open(save_path, "w", encoding="utf-8") as f:
             f.write("")
-
-    # Save rewrite queries
-    os.makedirs(rewrite_dir, exist_ok=True)
-    rewrite_filename = f"{output_filename_prefix}_rewrite_{timestamp}.jsonl"
-    rewrite_path = os.path.join(rewrite_dir, rewrite_filename)
     
-    with open(rewrite_path, "w") as outfile:
-        for line in results_buffer:
-            try:
-                line_data = json.loads(line)
-                new_data = {
-                    "_id": line_data["task_id"],
-                    "text": line_data["rewritten_query"]
-                }
-                outfile.write(json.dumps(new_data) + "\n")
-            except:
-                pass
-    
-    return save_path, rewrite_path
+    return save_path
 
 
 def run_task_b_generation(
@@ -328,7 +318,16 @@ def run_task_b_generation(
     llm,
     max_workers: int,
     output_filename_prefix: str = "task_b",
-    output_dir: str = "predictions/task_b"
+    output_dir: str = "predictions/task_b",
+    global_llm_name: str = None,
+    # Optional retrieval params for Task C
+    vector_db_type: str = None,
+    embedding_model: str = None,
+    top_k: int = None,
+    has_reranker: bool = False,
+    reranker_model: str = None,
+    top_k_reranker: int = None,
+    query_rewritten: bool = False
 ) -> str:
     """
     Execute Task B generation logic.
@@ -408,7 +407,31 @@ def run_task_b_generation(
     os.makedirs(output_dir, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_filename = f"{output_filename_prefix}_{timestamp}.jsonl"
+    
+    # Use Task C format if retrieval params are provided, otherwise Task B format
+    if vector_db_type or embedding_model or top_k is not None:
+        # Task C generation - use shorter notation with retrieval params
+        filename_base = generate_taskc_generation_filename(
+            task_type=output_filename_prefix,
+            timestamp=timestamp,
+            vector_db_type=vector_db_type,
+            embedding_model=embedding_model,
+            top_k=top_k,
+            has_reranker=has_reranker,
+            reranker_model=reranker_model if has_reranker else None,
+            top_k_reranker=top_k_reranker if has_reranker else None,
+            global_llm_name=global_llm_name,
+            query_rewritten=query_rewritten
+        )
+    else:
+        # Task B generation - simple format
+        filename_base = generate_prediction_filename(
+            task_type=output_filename_prefix,
+            timestamp=timestamp,
+            global_llm_name=global_llm_name
+        )
+    
+    save_filename = f"{filename_base}.jsonl"
     save_path = os.path.join(output_dir, save_filename)
 
     with open(save_path, "w", encoding="utf-8") as f:
@@ -416,10 +439,7 @@ def run_task_b_generation(
     
     return save_path
 
-
-# ============================================================================
 # MAIN RENDER FUNCTION
-# ============================================================================
 
 def render():
     st.header("🎯 Interactive Playground")
@@ -458,7 +478,7 @@ def render():
         None: "-- Select a Task --",
         "A": "Task A: Retrieval Only",
         "B": "Task B: Generation",
-        "C": "Task C: Rewrite + Retrieval + Generation"
+        "C": "Task C: Retrieval + Generation"
     }
     
     selected_task = st.selectbox(
@@ -510,7 +530,7 @@ def render():
         if not active_collections:
             st.warning("⚠️ No collections selected. Retrieval will fail.")
         else:
-            st.info(f"✅ Active: {[c['name'] for c in active_collections]}")
+            st.info(f"✅ Active collections: {', '.join([c['name'] for c in active_collections])}")
 
     if selected_task is None:
         st.info("👆 Please select a task to begin.")
@@ -616,7 +636,7 @@ def render():
                 start_time = time.time()
                 
                 # Use modular function
-                predictions_path, rewrite_path = run_task_a_retrieval(
+                predictions_path = run_task_a_retrieval(
                     input_file_path=tmp_file_path,
                     active_collections=active_collections,
                     embedding_config=embedding_config,
@@ -630,14 +650,16 @@ def render():
                     rerank_enabled=rerank_enabled_a,
                     rerank_top_k=rerank_top_k_a,
                     reranker_type=reranker_type_a,
-                    reranker_model=reranker_model_a
+                    reranker_model=reranker_model_a,
+                    vector_db_type=sel_db if sel_db != "No DB Found" else None,
+                    embedding_model=sel_model if sel_model != "No Models Found" else None,
+                    global_llm_name=model_name
                 )
                 
                 progress_bar.progress(1.0)
                 total_time = time.time() - start_time
                 st.success(f"✅ Retrieval complete in {total_time:.2f}s")
                 st.success(f"✅ Predictions saved locally to: `{predictions_path}`")
-                st.success(f"✅ Rewrite queries saved to: `{rewrite_path}`")
 
                 # Store output for download button
                 st.session_state.task_a_output = predictions_path
@@ -705,8 +727,9 @@ def render():
                     gen_prompt_template=gen_prompt_template,
                     llm=llm,
                     max_workers=max_workers,
-                    output_filename_prefix=f"task_b_{uploaded_file.name.split('.')[0]}",
-                    output_dir="predictions/task_b"
+                    output_filename_prefix="task_b",
+                    output_dir="predictions/task_b",
+                    global_llm_name=model_name
                 )
                 
                 progress_bar.progress(1.0)
@@ -756,6 +779,7 @@ def render():
         
         # Retrieval Settings
         task_c_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
+
         
         # --- Query Rewrite Configuration ---
         with st.expander("✏️ Query Rewrite Configuration", expanded=True):
@@ -855,7 +879,7 @@ def render():
                 start_time_retrieval = time.time()
                 
                 # Run Task A
-                predictions_path, rewrite_path = run_task_a_retrieval(
+                predictions_path = run_task_a_retrieval(
                     input_file_path=tmp_file_path,
                     active_collections=active_collections,
                     embedding_config=embedding_config,
@@ -863,13 +887,16 @@ def render():
                     llm_for_rewrite=llm_for_rewrite,
                     task_a_top_k=task_c_top_k,
                     max_workers=max_workers_retrieval,
-                    output_filename_prefix="task_c_retrieval",
+                    output_filename_prefix="task_c",
                     output_dir="predictions/task_c/retrieval",
                     rewrite_dir="predictions/task_c/retrieval",
                     rerank_enabled=rerank_enabled_c,
                     rerank_top_k=rerank_top_k_c,
                     reranker_type=reranker_type_c,
-                    reranker_model=reranker_model_c
+                    reranker_model=reranker_model_c,
+                    vector_db_type=sel_db if sel_db != "No DB Found" else None,
+                    embedding_model=sel_model if sel_model != "No Models Found" else None,
+                    global_llm_name=model_name
                 )
                 
                 progress_bar_retrieval.progress(1.0)
@@ -893,8 +920,17 @@ def render():
                     gen_prompt_template=gen_prompt_template,
                     llm=llm,
                     max_workers=max_workers_generation,
-                    output_filename_prefix=f"task_c_{uploaded_file.name.split('.')[0]}",
-                    output_dir="predictions/task_c/generation"
+                    output_filename_prefix="task_c",
+                    output_dir="predictions/task_c/generation",
+                    global_llm_name=model_name,
+                    # Pass retrieval params for Task C filename
+                    vector_db_type=sel_db if sel_db != "No DB Found" else None,
+                    embedding_model=sel_model if sel_model != "No Models Found" else None,
+                    top_k=task_c_top_k,
+                    has_reranker=rerank_enabled_c,
+                    reranker_model=reranker_model_c if rerank_enabled_c else None,
+                    top_k_reranker=rerank_top_k_c if rerank_enabled_c else None,
+                    query_rewritten=rw_config.get("enabled", False)
                 )
                 
                 progress_bar_generation.progress(1.0)
@@ -908,7 +944,6 @@ def render():
                 st.success(f"✅ Task C complete in {total_time:.2f}s (Retrieval: {total_time_retrieval:.2f}s, Generation: {total_time_generation:.2f}s)")
                 st.success(f"✅ Final predictions saved to: `{generation_output_path}`")
                 st.info(f"📄 Intermediate retrieval output: `{predictions_path}`")
-                st.info(f"📄 Rewrite queries: `{rewrite_path}`")
                 
                 # Store output path for download button
                 st.session_state.task_c_output = generation_output_path
