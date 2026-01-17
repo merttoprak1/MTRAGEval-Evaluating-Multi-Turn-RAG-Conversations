@@ -116,8 +116,18 @@ def _setup_faiss(
 
         documents = documents[batch_size:]
         vector_store.save_local(persist_directory)
+        
+        bridge_config = {
+            "collection": {
+                "vector_db_type": "FAISS", 
+                "collection_name": collection_name
+            },
+            "embedding": embedding_config or {}
+        }
+        
         with open(f"{persist_directory}/info.json", "w", encoding="utf-8") as f:
-            json.dump(db_config, f, ensure_ascii=False, indent=4)
+            json.dump(bridge_config, f, ensure_ascii=False, indent=4)
+        # ------------------------------------------------------------
 
     else:
         raise ValueError(

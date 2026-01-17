@@ -757,8 +757,6 @@ def render():
         # Retrieval Settings
         task_c_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
         
-        st.info(f"📁 Available collections: {', '.join(collections_list)}")
-        
         # --- Query Rewrite Configuration ---
         with st.expander("✏️ Query Rewrite Configuration", expanded=True):
             rewrite_enabled = st.checkbox("Enable Query Rewriting", value=True, key="rw_enable_c")
