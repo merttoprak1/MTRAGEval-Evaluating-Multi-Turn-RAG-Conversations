@@ -92,18 +92,34 @@ def run_task_a_retrieval(
             return collection_cache[local_collection], local_collection
         
         try:
+            # Load the Bridge Info (contains DB Type and Config)
             with open(f"collections/{local_collection}/info.json", "r", encoding="utf-8") as f:
                 collection_infos = json.load(f)
+            
+            # 1. Setup Embedding Config
             embed_cfg = embedding_config.copy()
-            embed_cfg["model_name"] = collection_infos["embedding"]["model_name"]
+            if "embedding" in collection_infos:
+                embed_cfg["model_name"] = collection_infos["embedding"].get("model_name", embed_cfg.get("model_name"))
+                if "dimension" in collection_infos["embedding"]:
+                    embed_cfg["dimension"] = collection_infos["embedding"]["dimension"]
+
+            # 2. Setup DB Config & Type
+            # We extract the type (Qdrant/FAISS) that was saved during ingestion
+            db_info = collection_infos.get("collection", {})
+            db_type = db_info.get("vector_db_type", "FAISS")
+            
+            # 3. Initialize Correct Store
             vs = setup_vector_store(
                 documents=None, 
                 embedding_config=embed_cfg, 
                 collection_name=local_collection,
-                db_config={}
+                db_type=db_type,     # Explicitly pass the type
+                db_config=db_info    # Pass the config (contains Qdrant URL/API key if any)
             )
+            
             collection_cache[local_collection] = vs
             return vs, local_collection
+            
         except Exception as e:
             logger.error(f"Failed to load collection {local_collection}: {e}")
             return None, local_collection

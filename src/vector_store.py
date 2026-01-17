@@ -3,6 +3,9 @@ import logging
 import os
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
 from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from src.embeddings import LocalOllamaEmbeddings
@@ -11,7 +14,7 @@ import json
 logger = logging.getLogger(__name__)
 
 # Supported Vector DB types
-SUPPORTED_VECTOR_DBS = ["FAISS", "Chroma", "Pinecone"]
+SUPPORTED_VECTOR_DBS = ["FAISS", "Qdrant"]
 
 
 def _get_embedding_model(embedding_config: dict):
@@ -136,77 +139,75 @@ def _setup_faiss(
 
     return vector_store
 
-
-def _setup_chroma(documents: List[Document], embedding_model, collection_name: str, is_gemini: bool, db_config: dict = None):
-    """Setup Chroma vector store."""
-    try:
-        from langchain_community.vectorstores import Chroma
-    except ImportError:
-        raise ImportError("Chroma is not installed. Run: pip install chromadb langchain-chroma")
-    
-    # Use config values
-    index_name = db_config.get("index_name", "default") if db_config else "default"
-    namespace = db_config.get("namespace") if db_config else None
-    
-    persist_directory = f"./chroma_db_{collection_name}_{index_name}"
-    chroma_collection_name = f"{collection_name}_{index_name}"
-    if namespace:
-        chroma_collection_name = f"{namespace}_{chroma_collection_name}"
-    
-    if documents:
-        logger.info(f"Ingesting {len(documents)} documents into Chroma collection: {chroma_collection_name}")
-        vector_store = Chroma.from_documents(
-            documents=documents,
-            embedding=embedding_model,
-            collection_name=chroma_collection_name,
-            persist_directory=persist_directory
-        )
+def _setup_qdrant(
+    documents: List[Document],
+    embedding_model,
+    collection_name: str,
+    db_config: dict = None,
+    embedding_config: dict = None
+):
+    # 1. Configuration
+    if db_config and "collection" in db_config:
+         qdrant_config = db_config.get("collection", {})
     else:
-        # Load existing
-        logger.info(f"Loading existing Chroma collection: {chroma_collection_name}")
-        vector_store = Chroma(
-            collection_name=chroma_collection_name,
-            embedding_function=embedding_model,
-            persist_directory=persist_directory
-        )
-    
-    return vector_store
+         qdrant_config = db_config or {}
 
+    url = qdrant_config.get("url")
+    api_key = qdrant_config.get("api_key")
+    local_path = "./qdrant_local_storage"
 
-def _setup_pinecone(documents: List[Document], embedding_model, collection_name: str, db_config: dict):
-    """Setup Pinecone vector store."""
-    try:
-        from langchain_pinecone import PineconeVectorStore
-        from pinecone import Pinecone
-    except ImportError:
-        raise ImportError("Pinecone is not installed. Run: pip install pinecone-client langchain-pinecone")
-    
-    api_key = db_config.get("api_key")
-    index_name = db_config.get("index_name", collection_name)
-    namespace = db_config.get("namespace")  # Can be None
-    
-    if not api_key:
-        raise ValueError("Pinecone API key is required")
-    
-    # Initialize Pinecone
-    pc = Pinecone(api_key=api_key)
-    
-    if documents:
-        logger.info(f"Ingesting {len(documents)} documents into Pinecone index: {index_name}, namespace: {namespace}")
-        vector_store = PineconeVectorStore.from_documents(
-            documents=documents,
-            embedding=embedding_model,
-            index_name=index_name,
-            namespace=namespace
-        )
+    # 2. Initialize Client
+    if url:
+        logger.info(f"Connecting to Qdrant Server at {url}")
+        client = QdrantClient(url=url, api_key=api_key)
     else:
-        logger.info(f"Connecting to existing Pinecone index: {index_name}, namespace: {namespace}")
-        vector_store = PineconeVectorStore(
-            index_name=index_name,
-            embedding=embedding_model,
-            namespace=namespace
+        logger.info(f"Using Local Qdrant at {local_path}")
+        client = QdrantClient(path=local_path)
+
+    # 3. Create Collection
+    if not client.collection_exists(collection_name):
+        logger.info(f"Collection '{collection_name}' not found. Creating...")
+        
+        # Auto-detect dimension
+        try:
+            # We embed a tiny string to get the exact dimension (768, 1536, etc.)
+            dummy_vec = embedding_model.embed_query("test")
+            dim = len(dummy_vec)
+            logger.info(f"Detected embedding dimension: {dim}")
+        except Exception as e:
+            logger.warning(f"Could not detect dimension, defaulting to 1536. Error: {e}")
+            dim = 1536
+
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=dim, distance=Distance.COSINE)
         )
-    
+        
+        # 4. Create UI Bridge (The "Fake" FAISS-like folder)
+        ui_persist_dir = f"./collections/{collection_name}"
+        os.makedirs(ui_persist_dir, exist_ok=True)
+        
+        # Save info.json so the UI knows this is a Qdrant DB
+        bridge_config = {
+            "collection": {"vector_db_type": "Qdrant", "collection_name": collection_name},
+            "embedding": embedding_config or {}
+        }
+        with open(f"{ui_persist_dir}/info.json", "w", encoding="utf-8") as f:
+            json.dump(bridge_config, f, ensure_ascii=False, indent=4)
+
+    # 5. Initialize VectorStore
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name=collection_name,
+        embedding=embedding_model,
+    )
+
+    # 6. Ingest Documents
+    if documents:
+        logger.info(f"Ingesting {len(documents)} documents into Qdrant...")
+        vector_store.add_documents(documents)
+        logger.info("Ingestion complete.")
+
     return vector_store
 
 
@@ -242,14 +243,13 @@ def setup_vector_store(
     # Setup appropriate vector store
     if db_type == "FAISS":
         vector_store = _setup_faiss(documents, embedding_model, collection_name, is_gemini, db_config)
-    elif db_type == "Chroma":
-        vector_store = _setup_chroma(documents, embedding_model, collection_name, is_gemini, db_config)
-    elif db_type == "Pinecone":
-        if not db_config or not db_config.get("api_key"):
-            raise ValueError("Pinecone requires db_config with api_key")
-        vector_store = _setup_pinecone(documents, embedding_model, collection_name, db_config)
+    
+    elif db_type == "Qdrant":
+        return _setup_qdrant(documents, embedding_model, collection_name, db_config, embedding_config)
     
     if vector_store is None and not documents:
+        # Note: Qdrant client persists, so even without docs, if the collection exists, it returns the store.
+        # This check is mostly for in-memory FAISS.
         logger.warning("No existing index and no documents provided.")
         return None
         
@@ -297,8 +297,12 @@ def delete_from_vector_store(vector_store, ids: List[str]):
         
     logger.info(f"Deleting {len(ids)} documents from vector store")
     try:
+        # Qdrant wrapper supports delete
         vector_store.delete(ids)
-        vector_store.save_local("./faiss_db_default_collection")
+        
+        # FAISS specific saving (Keep this logic only if it's FAISS)
+        if isinstance(vector_store, FAISS):
+            vector_store.save_local("./faiss_db_default_collection")
+            
     except Exception as e:
-        logger.error(f"Error deleting from FAISS: {e}")
-        # FAISS delete might be tricky depending on index type.
+        logger.error(f"Error deleting from Vector Store: {e}")

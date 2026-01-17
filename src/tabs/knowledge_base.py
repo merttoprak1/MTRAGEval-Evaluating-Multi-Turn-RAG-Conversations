@@ -19,14 +19,21 @@ def render():
     with kb_col1:
         st.subheader("1. Vector Database & Collection")
         db_existence = st.selectbox("New DB Or Old DB", ["New DB", "Old DB"], index=0)
-        collections = os.listdir("collections")
+        
+        # FIX: Handle missing directory on fresh install + filter system files
+        if not os.path.exists("collections"):
+            os.makedirs("collections")
+        collections = [d for d in os.listdir("collections") if os.path.isdir(os.path.join("collections", d))]
+
         if db_existence == "New DB":
-            vector_db_type = st.selectbox("Vector DB Type", ["FAISS", "Chroma", "Pinecone"], index=0)
+            vector_db_type = st.selectbox("Vector DB Type", ["FAISS", "Qdrant"], index=0)
             collection_name = st.text_input("Collection Name", value="default", key="collection_name") 
+            
+            # Check against the bridged list
             if collection_name in collections:
                 st.warning(
-                    f"'{collection_name}' is alreasy exist. "
-                    "Please type another name or select old db."
+                    f"'{collection_name}' already exists. "
+                    "Please type another name or select 'Old DB'."
                 )
                 st.stop()
                 
