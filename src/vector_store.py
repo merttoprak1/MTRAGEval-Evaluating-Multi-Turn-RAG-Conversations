@@ -9,6 +9,7 @@ from qdrant_client.http.models import Distance, VectorParams
 from langchain_openai import OpenAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from src.embeddings import LocalOllamaEmbeddings
+from src.file_manager import FileManager
 import time
 import json 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,8 @@ def _setup_faiss(
     embedding_model,
     collection_name: str,
     is_gemini: bool,
-    db_config: dict = None
+    db_config: dict = None,
+    embedding_config: dict = None
 ):
     """
     FAISS collection behavior:
@@ -71,7 +73,9 @@ def _setup_faiss(
     - If collection does not exist → create → build FAISS
     """
 
-    persist_directory = f"./collections/{collection_name}"
+    model_name = embedding_config.get("model_name", "default_model")
+    persist_directory = FileManager.get_collection_path("faiss", model_name, collection_name)
+    FileManager.ensure_directory(persist_directory)
     index_faiss_path = os.path.join(persist_directory, "index.faiss")
     index_pkl_path = os.path.join(persist_directory, "index.pkl")
 
@@ -112,8 +116,18 @@ def _setup_faiss(
 
         documents = documents[batch_size:]
         vector_store.save_local(persist_directory)
+        
+        bridge_config = {
+            "collection": {
+                "vector_db_type": "FAISS", 
+                "collection_name": collection_name
+            },
+            "embedding": embedding_config or {}
+        }
+        
         with open(f"{persist_directory}/info.json", "w", encoding="utf-8") as f:
-            json.dump(db_config, f, ensure_ascii=False, indent=4)
+            json.dump(bridge_config, f, ensure_ascii=False, indent=4)
+        # ------------------------------------------------------------
 
     else:
         raise ValueError(
@@ -137,6 +151,9 @@ def _setup_faiss(
         vector_store.save_local(persist_directory)
         logger.info("FAISS collection updated")
 
+        if vector_store:
+            vector_store._persist_directory = persist_directory
+
     return vector_store
 
 def _setup_qdrant(
@@ -154,7 +171,10 @@ def _setup_qdrant(
 
     url = qdrant_config.get("url")
     api_key = qdrant_config.get("api_key")
-    local_path = "./qdrant_local_storage"
+    
+    model_name = embedding_config.get("model_name", "default_model")
+    local_path = FileManager.get_qdrant_storage_path(model_name)
+    FileManager.ensure_directory(local_path)
 
     # 2. Initialize Client
     if url:
@@ -184,8 +204,8 @@ def _setup_qdrant(
         )
         
         # 4. Create UI Bridge (The "Fake" FAISS-like folder)
-        ui_persist_dir = f"./collections/{collection_name}"
-        os.makedirs(ui_persist_dir, exist_ok=True)
+        ui_persist_dir = FileManager.get_collection_path("qdrant", model_name, collection_name)
+        FileManager.ensure_directory(ui_persist_dir)
         
         # Save info.json so the UI knows this is a Qdrant DB
         bridge_config = {
@@ -242,8 +262,7 @@ def setup_vector_store(
     
     # Setup appropriate vector store
     if db_type == "FAISS":
-        vector_store = _setup_faiss(documents, embedding_model, collection_name, is_gemini, db_config)
-    
+        vector_store = _setup_faiss(documents, embedding_model, collection_name, is_gemini, db_config, embedding_config)
     elif db_type == "Qdrant":
         return _setup_qdrant(documents, embedding_model, collection_name, db_config, embedding_config)
     
@@ -273,20 +292,15 @@ def add_to_vector_store(vector_store, documents: List[Document]):
     
     logger.info(f"Adding {len(documents)} documents to vector store")
     vector_store.add_documents(documents)
-    # We need to know where to save. FAISS object doesn't store the path by default unless we extended it.
-    # We'll assume a default or pass it. For now, let's try to assume the wrapper has it or we can't easily save without path.
-    # Actually, we can infer it or we have to change the signature to accept path.
-    # Simplified: We will assume 'default_collection' path if not tracked, OR we just save to the same dir used in setup.
-    # Hack: We will look for the folder matching 'faiss_db_*' in current dir or just save to default.
-    # Better: Update setup to attach path to the object? No, that's hacky.
-    # Correct fix: Pass collection name to this function.
-    # For now, I will save to "./faiss_db_default_collection" as fallback, but this is a bug risk if multiple collections.
-    # I will modify app.py to pass collection name or handle saving there.
-    # But wait, FAISS in langchain is in-memory mostly. 
-    # Let's save to a fixed path for now or assume the "default_collection" logic holds.
-    # I'll update the signature in next step if needed. 
-    # Actually, I can just save to "./faiss_db_default_collection" for now as the app uses that default.
-    vector_store.save_local("./faiss_db_default_collection") 
+
+    if isinstance(vector_store, FAISS):
+        # We check if we attached the path in setup_vector_store
+        if hasattr(vector_store, '_persist_directory'):
+            logger.info(f"Saving FAISS index to {vector_store._persist_directory}")
+            vector_store.save_local(vector_store._persist_directory)
+        else:
+            logger.warning("FAISS index has no tracked path. Saving to fallback './faiss_fallback'")
+            vector_store.save_local("./faiss_fallback")
 
 def delete_from_vector_store(vector_store, ids: List[str]):
     """
@@ -300,9 +314,13 @@ def delete_from_vector_store(vector_store, ids: List[str]):
         # Qdrant wrapper supports delete
         vector_store.delete(ids)
         
-        # FAISS specific saving (Keep this logic only if it's FAISS)
+        # FAISS specific saving
         if isinstance(vector_store, FAISS):
-            vector_store.save_local("./faiss_db_default_collection")
+            if hasattr(vector_store, '_persist_directory'):
+                logger.info(f"Saving FAISS index to {vector_store._persist_directory}")
+                vector_store.save_local(vector_store._persist_directory)
+            else:
+                logger.warning("FAISS index has no tracked path. Cannot save deletion state.")
             
     except Exception as e:
         logger.error(f"Error deleting from Vector Store: {e}")
