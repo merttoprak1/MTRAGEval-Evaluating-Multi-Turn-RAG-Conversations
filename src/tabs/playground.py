@@ -11,6 +11,7 @@ import concurrent.futures
 from pathlib import Path
 from src.ingestion import load_json_documents, load_beir_queries
 from src.vector_store import setup_vector_store, get_retriever, add_to_vector_store, delete_from_vector_store
+from src.vector_store_retrieval import get_vector_store
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_REWRITE_PROMPT
@@ -138,8 +139,8 @@ def run_task_a_retrieval(
             db_type = db_info.get("vector_db_type", "FAISS")
             
             # 3. Initialize Correct Store
-            vs = setup_vector_store(
-                documents=None, 
+            # 3. Initialize Correct Store
+            vs = get_vector_store(
                 embedding_config=embed_cfg, 
                 collection_name=target_info['name'],
                 db_type=db_type,
