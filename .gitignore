@@ -12,3 +12,5 @@ input/
 corpora/
 .vscode
 .vscode/*
+qdrant_storage
+qdrant_storage/*
