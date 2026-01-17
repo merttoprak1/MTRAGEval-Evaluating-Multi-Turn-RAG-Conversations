@@ -92,7 +92,7 @@ def evaluate_relaxed(qrels, results, k_values):
 
 def compute_results(results, qrels):
 
-    k_values = [1, 3, 5]
+    k_values = [1, 3, 5, 10]
     if len(results) == 0:
         ndcg = _map = recall = precision = mrr = {i: 0.0 for i in k_values}
         scores_per_query_id = {}
@@ -103,15 +103,23 @@ def compute_results(results, qrels):
         # Also compute Relaxed Metrics
         print("\n--- Relaxed Evaluation (Base Document Match) ---")
         _, r_ndcg, _, r_recall, _ = evaluate_relaxed(qrels, results, k_values)
-        
-        # Merge Relaxed scores into global output with prefix
-        for k in k_values:
-            ndcg[f"Doc_NDCG@{k}"] = r_ndcg[f"NDCG@{k}"]
-            recall[f"Doc_Recall@{k}"] = r_recall[f"Recall@{k}"]
 
-    scores_global = {}
-    scores_global[f"nDCG"] = list(ndcg.values())
-    scores_global[f"Recall"] = list(recall.values())
+    # Build structured output with clear metric names
+    scores_global = {
+        "strict": {
+            "nDCG": {f"@{k}": ndcg.get(f"NDCG@{k}", 0.0) for k in k_values},
+            "Recall": {f"@{k}": recall.get(f"Recall@{k}", 0.0) for k in k_values}
+        },
+        "relaxed": {
+            "nDCG": {f"@{k}": r_ndcg.get(f"NDCG@{k}", 0.0) for k in k_values} if 'r_ndcg' in dir() else {},
+            "Recall": {f"@{k}": r_recall.get(f"Recall@{k}", 0.0) for k in k_values} if 'r_recall' in dir() else {}
+        }
+    }
+    
+    # Also keep legacy format for backward compatibility
+    scores_global["nDCG"] = [ndcg.get(f"NDCG@{k}", 0.0) for k in k_values]
+    scores_global["Recall"] = [recall.get(f"Recall@{k}", 0.0) for k in k_values]
+    scores_global["k_values"] = k_values
     
     return scores_global, scores_per_query_id
    
@@ -212,7 +220,16 @@ def main():
         scores_global['collection'] = collection_name
         scores_global['count'] = len(preds_for_collection)
         
-        print("Retriever Evaluation Aggregate Scores:", scores_global)
+        # Pretty print with k values
+        k_vals = scores_global.get('k_values', [1, 3, 5, 10])
+        print(f"\nCollection: {collection_name} ({len(preds_for_collection)} queries)")
+        print("=" * 50)
+        print("Strict Evaluation (Chunk ID Match):")
+        print(f"  nDCG:   " + "  ".join([f"@{k}={scores_global['strict']['nDCG'].get(f'@{k}', 0):.4f}" for k in k_vals]))
+        print(f"  Recall: " + "  ".join([f"@{k}={scores_global['strict']['Recall'].get(f'@{k}', 0):.4f}" for k in k_vals]))
+        print("\nRelaxed Evaluation (Base Document Match):")
+        print(f"  nDCG:   " + "  ".join([f"@{k}={scores_global['relaxed']['nDCG'].get(f'@{k}', 0):.4f}" for k in k_vals]))
+        print(f"  Recall: " + "  ".join([f"@{k}={scores_global['relaxed']['Recall'].get(f'@{k}', 0):.4f}" for k in k_vals]))
         
         global_scores_per_query_id.update(scores_per_query_id)
         scores_global_lst.append(scores_global)
@@ -220,6 +237,7 @@ def main():
     
     n = len(scores_global_lst[0]['Recall'])
     total_count = sum(d['count'] for d in scores_global_lst)
+    k_vals = scores_global_lst[0].get('k_values', [1, 3, 5, 10])
 
     weighted_avg_recall, weighted_avg_ndcg = [], []
     for i in range(n):
@@ -229,8 +247,11 @@ def main():
         weighted_sum_ndcg = sum(d['nDCG'][i] * d['count'] for d in scores_global_lst)
         weighted_avg_ndcg.append(weighted_sum_ndcg / total_count)
 
-    print("Weighted average Recall:", weighted_avg_recall)  
-    print("Weighted average nDCG:", weighted_avg_ndcg)  
+    print("\n" + "=" * 50)
+    print("WEIGHTED AVERAGE (All Collections)")
+    print("=" * 50)
+    print(f"  nDCG:   " + "  ".join([f"@{k}={weighted_avg_ndcg[i]:.4f}" for i, k in enumerate(k_vals)]))
+    print(f"  Recall: " + "  ".join([f"@{k}={weighted_avg_recall[i]:.4f}" for i, k in enumerate(k_vals)]))  
 
     rows = scores_global_lst.copy()
     rows.append({
