@@ -5,163 +5,189 @@ import logging
 import json
 from src.ingestion import load_json_documents
 from src.vector_store import setup_vector_store
+from src.file_manager import FileManager
+
 logger = logging.getLogger(__name__)
 
 def render():
     st.header("📚 Knowledge Base Management")
     
+    # Initialize session state for embedding config if not present
+    if "kb_embed_config" not in st.session_state:
+        st.session_state.kb_embed_config = {}
+
     kb_col1, kb_col2 = st.columns(2)
-    embedding_config = {}
-    vd_config = {}
-    collection_infos = {"embedding" : {}, "collection" : {}}
-    vector_db_type = "FAISS"
-    collection_name = "default"
+    
+    # Variables to hold selection state
+    selected_db_type = "FAISS"
+    selected_model_name = "default"
+    selected_collection_name = "default"
+    is_existing = False
+    
+    # ==========================================
+    # COLUMN 1: Vector Database & Collection
+    # ==========================================
     with kb_col1:
         st.subheader("1. Vector Database & Collection")
-        db_existence = st.selectbox("New DB Or Old DB", ["New DB", "Old DB"], index=0)
+        db_action = st.radio("Action", ["Create New Collection", "Load Existing"], index=0, key="kb_action")
         
-        # FIX: Handle missing directory on fresh install + filter system files
-        if not os.path.exists("collections"):
-            os.makedirs("collections")
-        collections = [d for d in os.listdir("collections") if os.path.isdir(os.path.join("collections", d))]
-
-        if db_existence == "New DB":
-            vector_db_type = st.selectbox("Vector DB Type", ["FAISS", "Qdrant"], index=0)
-            collection_name = st.text_input("Collection Name", value="default", key="collection_name") 
+        if db_action == "Load Existing":
+            is_existing = True
             
-            # Check against the bridged list
-            if collection_name in collections:
-                st.warning(
-                    f"'{collection_name}' already exists. "
-                    "Please type another name or select 'Old DB'."
-                )
+            # 1. Select DB Type
+            # Scan directories in 'collections/' to see which DBs exist
+            available_dbs = []
+            if os.path.exists(FileManager.BASE_COLLECTIONS_DIR):
+                available_dbs = [d for d in os.listdir(FileManager.BASE_COLLECTIONS_DIR) 
+                                 if os.path.isdir(os.path.join(FileManager.BASE_COLLECTIONS_DIR, d))]
+            
+            if not available_dbs:
+                st.warning("No collections found.")
                 st.stop()
                 
-        elif db_existence == "Old DB":
-            collection_name = st.selectbox("Select a Collection", collections, index=0)
-            file_path = f"collections/{collection_name}/info.json"
-            with open(file_path, "r", encoding="utf-8") as f:
-                collection_infos = json.load(f)
-            vector_db_type = collection_infos["collection"]["vector_db_type"]
-               
-        vd_config = {"vector_db_type": vector_db_type, "collection_name": collection_name}
+            selected_db_type = st.selectbox("Select Vector DB", available_dbs, key="kb_sel_db")
+            
+            # 2. Select Embedding Model (Sub-folder of DB)
+            db_path = os.path.join(FileManager.BASE_COLLECTIONS_DIR, selected_db_type)
+            available_models = [d for d in os.listdir(db_path) if os.path.isdir(os.path.join(db_path, d))]
+            
+            if not available_models:
+                st.warning(f"No embedding models found for {selected_db_type}.")
+                st.stop()
+                
+            selected_model_name = st.selectbox("Select Embedding Model", available_models, key="kb_sel_model")
+            
+            # 3. Select Collection (Sub-folder of Model)
+            available_collections = FileManager.list_collections(selected_db_type, selected_model_name)
+            
+            if not available_collections:
+                st.warning("No collections found for this configuration.")
+                st.stop()
+                
+            selected_collection_name = st.selectbox("Select Collection", available_collections, key="kb_sel_col")
+            
+            # Load info.json to populate Col 2
+            info_path = os.path.join(
+                FileManager.get_collection_path(selected_db_type, selected_model_name, selected_collection_name),
+                "info.json"
+            )
+            
+            if os.path.exists(info_path):
+                with open(info_path, "r") as f:
+                    loaded_info = json.load(f)
+                    # Update session state for Col 2 to render strictly
+                    st.session_state.kb_loaded_embed_config = loaded_info.get("embedding", {})
+            else:
+                st.warning("⚠️ 'info.json' missing. Embedding settings unknown.")
+                st.session_state.kb_loaded_embed_config = {}
 
+        else: # Create New
+            is_existing = False
+            selected_db_type = st.selectbox("Vector DB Type", ["FAISS", "Qdrant"], index=0, key="kb_new_db_type")
+            selected_collection_name = st.text_input("Collection Name", value="my_collection", key="kb_new_col_name")
+            
+            # Sanitize name immediately for feedback
+            clean_name = FileManager._sanitize(selected_collection_name)
+            if clean_name != selected_collection_name:
+                st.caption(f"Will be saved as: `{clean_name}`")
+                selected_collection_name = clean_name
+
+    # ==========================================
+    # COLUMN 2: Embedding Configuration
+    # ==========================================
     with kb_col2:
         st.subheader("2. Embedding Configuration")
-        embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2, key="kb_embedding_provide")
-        embedding_model_default = collection_infos["embedding"]["model_name"] if "model_name" in collection_infos["embedding"] else None
-        # Model lists
-        OPENAI_EMBEDDING_MODELS = {
-            "text-embedding-3-small": {"dim": 1536, "description": "Fastest"},
-            "text-embedding-3-large": {"dim": 3072, "description": "Best quality"},
-            "text-embedding-ada-002": {"dim": 1536, "description": "Legacy"},
-        }
-        GEMINI_EMBEDDING_MODELS = {
-            "models/text-embedding-004": {"dim": 768, "description": "Latest"},
-            "models/embedding-001": {"dim": 768, "description": "Legacy"},
-        }
-        LOCAL_EMBEDDING_MODELS = {
-            "nomic-embed-text": {"dim": 768, "description": "General purpose"},
-            "mxbai-embed-large": {"dim": 1024, "description": "High quality"},
-            "all-minilm": {"dim": 384, "description": "Fast"},
-        }      
-        if embedding_provider in ("OpenAI", "Gemini"):
-            models = OPENAI_EMBEDDING_MODELS if embedding_provider == "OpenAI" else GEMINI_EMBEDDING_MODELS
-            batch_limits = (1, 2048, 100) if embedding_provider == "OpenAI" else (1, 100, 10)
-            embedding_api_key = st.text_input(f"{embedding_provider} Embedding API Key", type="password")
-            if db_existence == "Old DB":
-                st.text_input(
-                    "Embedding Model",
-                    value=embedding_model_default,
-                    disabled=True
-                )
-            else:
-                embedding_model_default = st.selectbox(
-                    "Embedding Model",
-                    list(LOCAL_EMBEDDING_MODELS.keys()),
-                    index=1
-                )
-                embedding_model_default
-            model_info = models[embedding_model_default]
-            st.caption(f"Dim: {model_info['dim']}")
-            embedding_model_config = {"provider": embedding_provider, "api_key": embedding_api_key, "model_name": embedding_model_default, "dimension": model_info['dim']}
+        
+        # If loading existing, we force the display to match the loaded config
+        if is_existing:
+            loaded_cfg = st.session_state.get("kb_loaded_embed_config", {})
+            st.info("🔒 Configuration locked to match selected collection.")
+            
+            st.text_input("Provider", value=loaded_cfg.get("provider", "Unknown"), disabled=True)
+            st.text_input("Model Name", value=loaded_cfg.get("model_name", "Unknown"), disabled=True)
+            
+            # We construct the config object for the ingestion/setup function
+            embedding_config = loaded_cfg
+            
         else:
-            embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434", key="kb_embed_base_url")
-            if db_existence == "Old DB":
-                st.text_input(
-                    "Embedding Model",
-                    value=embedding_model_default,
-                    disabled=True
-                )
-            else:
-                embedding_model_default = st.selectbox(
-                    "Embedding Model",
-                    list(LOCAL_EMBEDDING_MODELS.keys())
-                )
-            embedding_model_config = {"provider": "Local", "base_url": embed_base_url, "model_name": embedding_model_default}
+            # Standard Selection Logic
+            embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2, key="kb_prov_new")
+            
+            embedding_api_key = None
+            embed_base_url = None
+            model_name = "default"
+            
+            LOCAL_EMBEDDING_MODELS = {
+                "nomic-embed-text": {"dim": 768},
+                "mxbai-embed-large": {"dim": 1024},
+                "all-minilm": {"dim": 384},
+            }
+            
+            if embedding_provider in ("OpenAI", "Gemini"):
+                embedding_api_key = st.text_input(f"{embedding_provider} API Key", type="password", key="kb_new_key")
+                if embedding_provider == "OpenAI":
+                    model_name = "text-embedding-3-small" 
+                else:
+                    model_name = "models/text-embedding-004"
+                
+                embedding_config = {
+                    "provider": embedding_provider, 
+                    "api_key": embedding_api_key, 
+                    "model_name": model_name
+                }
+            else: # Local
+                embed_base_url = st.text_input("Base URL", value="http://localhost:11434", key="kb_new_url")
+                model_name = st.selectbox("Model", list(LOCAL_EMBEDDING_MODELS.keys()), index=0, key="kb_new_local_model")
+                embedding_config = {
+                    "provider": "Local", 
+                    "base_url": embed_base_url, 
+                    "model_name": model_name
+                }
+            
+            # Check if this new collection would overwrite an existing one
+            target_path = FileManager.get_collection_path(selected_db_type, model_name, selected_collection_name)
+            if os.path.exists(target_path):
+                st.warning(f"⚠️ Collection already exists at:\n`{target_path}`\nIngesting will append to it.")
 
-        embedding_config = {"model_name": embedding_model_default}
-    
     st.divider()
-    # --- Ingestion Section ---
+
+    # ==========================================
+    # 3. Data Ingestion
+    # ==========================================
     st.subheader("3. Data Ingestion")
+    
     uploaded_file = st.file_uploader("Upload Documents (JSON/JSONL)", type=["json", "jsonl"])
 
-    if uploaded_file:
-        if st.button("Process & Ingest File"):
-            with st.spinner("Processing..."):
-                try:
-                    suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                        tmp_file.write(uploaded_file.getvalue())
-                        tmp_file_path = tmp_file.name
-                    
-                    documents = load_json_documents(tmp_file_path)
-                    if documents:
-                            metadata_collections = {
-                                "embedding" : embedding_config,
-                                "collection" : vd_config
-                            }
-                            vector_store = setup_vector_store(
-                                documents, embedding_model_config, collection_name, vector_db_type, metadata_collections
-                            )
-                            st.success(f"Successfully ingested {len(documents)} documents into {collection_name}")
-                    else:
-                        uploaded_file = None
-                        st.error("No valid documents found.")
-                    os.remove(tmp_file_path)
-                except Exception as e:
-                    st.error(f"Ingestion failed: {e}")
+    if uploaded_file and st.button("Process & Ingest File"):
+        with st.spinner("Processing..."):
+            try:
+                suffix = ".jsonl" if uploaded_file.name.endswith(".jsonl") else ".json"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_file_path = tmp_file.name
 
-    # --- Management Section (Merged from old tab) ---
-    st.divider()
-    # with st.expander("🛠️ Inspect & Manage Collection"):
-    #     if st.session_state.vector_store:
-    #         try:
-    #             collection_data = st.session_state.vector_store.get()
-    #             num_docs = len(collection_data['ids'])
-    #             st.write(f"Total documents: {num_docs}")
+                documents = load_json_documents(tmp_file_path)
                 
-    #             if num_docs > 0:
-    #                 data_for_df = []
-    #                 for i in range(min(num_docs, 100)): # Limit preview
-    #                     data_for_df.append({
-    #                         "Select": False,
-    #                         "ID": collection_data['ids'][i],
-    #                         "Content": collection_data['documents'][i][:100] + "...",
-    #                         "Metadata": str(collection_data['metadatas'][i])
-    #                     })
+                if documents:
+                    # Configuration for vector store
+                    vd_config = {"vector_db_type": selected_db_type}
                     
-    #                 df_to_edit = pd.DataFrame(data_for_df)
-    #                 edited_df = st.data_editor(df_to_edit, column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)}, hide_index=True)
-
-    #                 if st.button("Delete Selected"):
-    #                     ids_to_delete = edited_df[edited_df.Select]["ID"].tolist()
-    #                     if ids_to_delete:
-    #                         delete_from_vector_store(st.session_state.vector_store, ids_to_delete)
-    #                         st.success(f"Deleted {len(ids_to_delete)} chunks.")
-    #                         st.rerun()
-    #         except Exception as e:
-    #             st.error(f"Error inspecting DB: {e}")
-    #     else:
-    #         st.info("No active vector store.")
+                    vector_store = setup_vector_store(
+                        documents=documents,
+                        embedding_config=embedding_config,
+                        collection_name=selected_collection_name,
+                        db_type=selected_db_type,
+                        db_config=vd_config
+                    )
+                    
+                    st.success(f"Successfully ingested {len(documents)} documents.")
+                    st.info(f"Saved to: `{FileManager.get_collection_path(selected_db_type, embedding_config.get('model_name', 'default'), selected_collection_name)}`")
+                    
+                else:
+                    st.error("No valid documents found.")
+                
+                os.remove(tmp_file_path)
+                
+            except Exception as e:
+                st.error(f"Ingestion failed: {e}")
+                logger.error(f"Ingestion Error: {e}", exc_info=True)

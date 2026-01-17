@@ -14,6 +14,7 @@ from src.vector_store import setup_vector_store, get_retriever, add_to_vector_st
 from src.llm_client import get_llm
 from src.rag import create_rag_chain
 from src.query_rewrite import rewrite_query, DEFAULT_REWRITE_PROMPT, CONTEXTUAL_REWRITE_PROMPT
+from src.file_manager import FileManager
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -45,7 +46,7 @@ Answer the user's question now using the retrieved context.
 
 def run_task_a_retrieval(
     input_file_path: str,
-    collections_list: list,
+    active_collections: list,
     embedding_config: dict,
     rw_config: dict,
     llm_for_rewrite,
@@ -66,34 +67,63 @@ def run_task_a_retrieval(
         tuple: (predictions_path, rewrite_path) - paths to saved output files
     """
     # Collection mapping helper
-    def map_collection_name(input_collection: str) -> str:
-        """Map input Collection field to local collection folder name."""
-        input_lower = input_collection.lower()
-        for local_col in collections_list:
-            local_lower = local_col.lower()
-            if 'clapnq' in input_lower and 'clapnq' in local_lower:
-                return local_col
-            if 'govt' in input_lower and 'govt' in local_lower:
-                return local_col
-            if 'fiqa' in input_lower and 'fiqa' in local_lower:
-                return local_col
-            if ('cloud' in input_lower or 'ibmcloud' in input_lower) and ('cloud' in local_lower or 'ibmcloud' in local_lower):
-                return local_col
-        return collections_list[0] if collections_list else input_collection
-    
+    def map_collection_target(input_collection_name: str) -> dict:
+        """
+        Map input 'Collection' string to one of the user-selected active collections.
+        Returns a dict: {'name': str, 'db': str, 'model': str}
+        """
+        input_lower = input_collection_name.lower()
+        
+        # 1. Exact or Partial Match on Name against active collections
+        for col_info in active_collections:
+            local_name = col_info['name'].lower()
+            
+            # Specific dataset keywords common in benchmarks
+            if 'clapnq' in input_lower and 'clapnq' in local_name: return col_info
+            if 'govt' in input_lower and 'govt' in local_name: return col_info
+            if 'fiqa' in input_lower and 'fiqa' in local_name: return col_info
+            if ('cloud' in input_lower or 'ibmcloud' in input_lower) and ('cloud' in local_name or 'ibmcloud' in local_name): return col_info
+            
+            # General fallback: is the input name inside the local name?
+            if input_lower in local_name:
+                return col_info
+
+        # 2. Fallback: Return the first selected collection if no match found
+        return active_collections[0] if active_collections else None
+
     # Collection cache for dynamic loading
     collection_cache = {}
     
     def get_vector_store_for_collection(collection_field: str):
         """Get or create vector store for a collection, with caching."""
-        local_collection = map_collection_name(collection_field)
         
-        if local_collection in collection_cache:
-            return collection_cache[local_collection], local_collection
+        # Determine which local collection to use
+        target_info = map_collection_target(collection_field)
+        
+        if not target_info:
+            return None, "No Collection Selected"
+
+        # Unique cache key based on path components
+        cache_key = f"{target_info['db']}_{target_info['model']}_{target_info['name']}"
+        
+        if cache_key in collection_cache:
+            return collection_cache[cache_key], target_info['name']
         
         try:
-            # Load the Bridge Info (contains DB Type and Config)
-            with open(f"collections/{local_collection}/info.json", "r", encoding="utf-8") as f:
+            # Use FileManager to get the correct path
+            col_path = FileManager.get_collection_path(
+                target_info['db'], 
+                target_info['model'], 
+                target_info['name']
+            )
+            
+            # Load the Bridge Info
+            info_path = os.path.join(col_path, "info.json")
+            if not os.path.exists(info_path):
+                 logger.error(f"info.json missing at {info_path}")
+                 return None, target_info['name']
+
+            with open(info_path, "r", encoding="utf-8") as f:
                 collection_infos = json.load(f)
             
             # 1. Setup Embedding Config
@@ -103,8 +133,7 @@ def run_task_a_retrieval(
                 if "dimension" in collection_infos["embedding"]:
                     embed_cfg["dimension"] = collection_infos["embedding"]["dimension"]
 
-            # 2. Setup DB Config & Type
-            # We extract the type (Qdrant/FAISS) that was saved during ingestion
+            # 2. Setup DB Config
             db_info = collection_infos.get("collection", {})
             db_type = db_info.get("vector_db_type", "FAISS")
             
@@ -112,17 +141,17 @@ def run_task_a_retrieval(
             vs = setup_vector_store(
                 documents=None, 
                 embedding_config=embed_cfg, 
-                collection_name=local_collection,
-                db_type=db_type,     # Explicitly pass the type
-                db_config=db_info    # Pass the config (contains Qdrant URL/API key if any)
+                collection_name=target_info['name'],
+                db_type=db_type,
+                db_config=db_info
             )
             
-            collection_cache[local_collection] = vs
-            return vs, local_collection
+            collection_cache[cache_key] = vs
+            return vs, target_info['name']
             
         except Exception as e:
-            logger.error(f"Failed to load collection {local_collection}: {e}")
-            return None, local_collection
+            logger.error(f"Failed to load collection {target_info['name']}: {e}")
+            return None, target_info['name']
     
     # Worker function
     def process_single_item(item):
@@ -441,7 +470,47 @@ def render():
     st.session_state.selected_task = selected_task
     st.divider()
 
-    collections_list = os.listdir("collections")
+    # --- COLLECTION SELECTION UI ---
+    active_collections = []
+    
+    # Only show collection selector for Retrieval tasks
+    if selected_task in ["A", "C"]:
+        st.subheader("🗂️ Active Collection Selection")
+        
+        # 1. DB Type
+        avail_dbs = []
+        if os.path.exists(FileManager.BASE_COLLECTIONS_DIR):
+            avail_dbs = [d for d in os.listdir(FileManager.BASE_COLLECTIONS_DIR) if os.path.isdir(os.path.join(FileManager.BASE_COLLECTIONS_DIR, d))]
+        
+        sel_db = st.selectbox("1. Select Vector DB", avail_dbs if avail_dbs else ["No DB Found"])
+        
+        # 2. Embedding Model
+        avail_models = []
+        if sel_db and sel_db != "No DB Found":
+             db_path = os.path.join(FileManager.BASE_COLLECTIONS_DIR, sel_db)
+             avail_models = [d for d in os.listdir(db_path) if os.path.isdir(os.path.join(db_path, d))]
+        
+        sel_model = st.selectbox("2. Select Embedding Model", avail_models if avail_models else ["No Models Found"])
+        
+        # 3. Collections (Multi-select)
+        avail_cols = []
+        if sel_model and sel_model != "No Models Found":
+            avail_cols = FileManager.list_collections(sel_db, sel_model)
+            
+        selected_col_names = st.multiselect("3. Select Collections", avail_cols, default=avail_cols[:1] if avail_cols else None)
+        
+        # Construct the active_collections list of dicts
+        for name in selected_col_names:
+            active_collections.append({
+                "name": name,
+                "db": sel_db,
+                "model": sel_model
+            })
+            
+        if not active_collections:
+            st.warning("⚠️ No collections selected. Retrieval will fail.")
+        else:
+            st.info(f"✅ Active: {[c['name'] for c in active_collections]}")
 
     if selected_task is None:
         st.info("👆 Please select a task to begin.")
@@ -461,26 +530,6 @@ def render():
         with conf_col2:
                 # Retrieval Settings Override
                 task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
-        
-        # Collection mapping: maps input Collection names to local collection folders
-        def map_collection_name(input_collection: str) -> str:
-            """Map input Collection field to local collection folder name."""
-            input_lower = input_collection.lower()
-            for local_col in collections_list:
-                local_lower = local_col.lower()
-                # Check if key parts match (e.g., 'clapnq', 'govt', 'fiqa', 'cloud')
-                if 'clapnq' in input_lower and 'clapnq' in local_lower:
-                    return local_col
-                if 'govt' in input_lower and 'govt' in local_lower:
-                    return local_col
-                if 'fiqa' in input_lower and 'fiqa' in local_lower:
-                    return local_col
-                if ('cloud' in input_lower or 'ibmcloud' in input_lower) and ('cloud' in local_lower or 'ibmcloud' in local_lower):
-                    return local_col
-            # Fallback: return first collection or the input as-is
-            return collections_list[0] if collections_list else input_collection
-        
-        st.info(f"📁 Available collections: {', '.join(collections_list)}")
 
         # --- Query Rewrite Configuration ---
         with st.expander("✏️ Query Rewrite Configuration", expanded=True):
@@ -569,7 +618,7 @@ def render():
                 # Use modular function
                 predictions_path, rewrite_path = run_task_a_retrieval(
                     input_file_path=tmp_file_path,
-                    collections_list=collections_list,
+                    active_collections=active_collections,
                     embedding_config=embedding_config,
                     rw_config=rw_config,
                     llm_for_rewrite=llm_for_rewrite,
@@ -810,7 +859,7 @@ def render():
                 # Run Task A
                 predictions_path, rewrite_path = run_task_a_retrieval(
                     input_file_path=tmp_file_path,
-                    collections_list=collections_list,
+                    active_collections=active_collections,
                     embedding_config=embedding_config,
                     rw_config=rw_config,
                     llm_for_rewrite=llm_for_rewrite,
