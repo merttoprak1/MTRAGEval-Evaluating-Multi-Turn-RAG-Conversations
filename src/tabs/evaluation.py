@@ -1,3 +1,4 @@
+import ast
 import streamlit as st
 import pandas as pd
 import tempfile
@@ -280,16 +281,32 @@ def render():
                                         cwd=project_root)                                
                                     if result.returncode == 0:
                                         status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
-                                        
+                                               
+                                        aggregate_csv = os.path.splitext(output_path)[0] + "_aggregate.csv"
+                                        if os.path.exists(aggregate_csv):
+                                            df_agg = pd.read_csv(aggregate_csv)
+                                            last_row = df_agg.iloc[-1]
+                                            ndcg_values = ast.literal_eval(last_row['nDCG'])
+                                            recall_values = ast.literal_eval(last_row['Recall'])
+                                            row_data = {
+                                                'R@1': recall_values[0],
+                                                'R@3': recall_values[1],
+                                                'R@5': recall_values[2],
+                                                'R@10': recall_values[3],
+                                                'nDCG@1': ndcg_values[0],
+                                                'nDCG@3': ndcg_values[1],
+                                                'nDCG@5': ndcg_values[2],
+                                                'nDCG@10': ndcg_values[3]
+                                            }
+                                            display_df = pd.DataFrame([row_data])
+                                            st.table(display_df)
+                                            st.subheader("📋 Aggregate Results")
+                                            st.dataframe(df_agg)
+
+                                            
                                         if result.stdout:
                                             st.subheader("📈 Retrieval Metrics")
                                             st.code(result.stdout)
-                                        
-                                        aggregate_csv = os.path.splitext(output_path)[0] + "_aggregate.csv"
-                                        if os.path.exists(aggregate_csv):
-                                            st.subheader("📋 Aggregate Results")
-                                            df_agg = pd.read_csv(aggregate_csv)
-                                            st.dataframe(df_agg)
                                         
                                         if os.path.exists(output_path):
                                             with open(output_path, "rb") as f:
