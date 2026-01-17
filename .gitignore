@@ -10,3 +10,5 @@ venv
 .DS_Store
 input/
 corpora/
+.vscode
+.vscode/*
