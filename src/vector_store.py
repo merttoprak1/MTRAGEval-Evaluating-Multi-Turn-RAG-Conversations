@@ -8,8 +8,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
-from langchain_openai import OpenAIEmbeddings
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from qdrant_client.http.models import Distance, VectorParams
 from src.embeddings import LocalOllamaEmbeddings
 from src.file_manager import FileManager
 import time
@@ -33,30 +32,14 @@ def _get_embedding_model(embedding_config: dict):
     Factory function to create embedding model based on config.
     """
     if not embedding_config:
-        logger.warning("No embedding config provided, falling back to OpenAI default")
-        return OpenAIEmbeddings()
+        logger.warning("No embedding config provided, falling back to Local Default")
+        # Default fallback if nothing provided - assume local
+        return LocalOllamaEmbeddings(base_url=Config.LOCAL_EMBEDDING_BASE_URL, model="nomic-embed-text")
     
-    provider = embedding_config.get("provider", "OpenAI")
+    provider = embedding_config.get("provider", "Local")
     logger.info(f"Using embedding provider: {provider}")
     
-    if provider == "OpenAI":
-        api_key = embedding_config.get("api_key")
-        model_name = embedding_config.get("model_name", "text-embedding-3-small")
-        if not api_key:
-            logger.error("API Key missing for OpenAI embeddings")
-            raise ValueError("API Key is required for OpenAI embeddings.")
-        logger.info(f"Using OpenAI embedding model: {model_name}")
-        return OpenAIEmbeddings(api_key=api_key, model=model_name)
-        
-    elif provider == "Gemini":
-        api_key = embedding_config.get("api_key")
-        if not api_key:
-            logger.error("API Key missing for Gemini embeddings")
-            raise ValueError("API Key is required for Gemini embeddings.")
-        model_name = embedding_config.get("model_name", "models/embedding-001")
-        return GoogleGenerativeAIEmbeddings(google_api_key=api_key, model=model_name)
-        
-    elif provider == "Local":
+    if provider == "Local":
         base_url = embedding_config.get("base_url")
         model_name = embedding_config.get("model_name")
         logger.info(f"Configuring Local embeddings: URL={base_url}, Model={model_name}")
@@ -66,6 +49,9 @@ def _get_embedding_model(embedding_config: dict):
         return LocalOllamaEmbeddings(base_url=base_url, model=model_name)
     
     else:
+        # Fallback or Error for removed providers
+        if provider in ["OpenAI", "Gemini"]:
+             raise ValueError(f"Provider '{provider}' has been removed/disabled.")
         raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
@@ -116,7 +102,6 @@ def _setup_faiss(
     documents: List[Document],
     embedding_model,
     collection_name: str,
-    is_gemini: bool,
     db_config: dict = None,
     embedding_config: dict = None
 ):
@@ -132,8 +117,8 @@ def _setup_faiss(
     index_faiss_path = os.path.join(persist_directory, "index.faiss")
     index_pkl_path = os.path.join(persist_directory, "index.pkl")
 
-    batch_size = 100 if is_gemini else 1000
-    delay = 1.0 if is_gemini else 0.0
+    batch_size = 1000
+    delay = 0.0
 
     vector_store = None
     existing_index = os.path.exists(index_faiss_path) and os.path.exists(index_pkl_path)
@@ -232,8 +217,22 @@ def _setup_qdrant(
         raise ValueError
 
     # 3. Create Collection (100k+ points optimized)
-    if not client.collection_exists(collection_name):
-        logger.info(f"Collection '{collection_name}' not found. Creating...")
+    # Generate composite name for Qdrant server to distinguish same collection name with different embeddings
+    # Sanitized for Qdrant (alphanumeric, -, _)
+    # Extra sanitization for model names like "all-minilm:l6-v2"
+    sanitized_model = FileManager._sanitize(model_name).replace(" ", "_").replace("/", "_").replace(":", "_")
+    sanitized_collection = FileManager._sanitize(collection_name).replace(" ", "_").replace(":", "_")
+    
+    # Check if we should append model name (avoid double appending if already there)
+    if sanitized_model not in sanitized_collection:
+        qdrant_collection_name = f"{sanitized_collection}_{sanitized_model}"
+    else:
+        qdrant_collection_name = sanitized_collection
+        
+    logger.info(f"Using Qdrant Collection Name: {qdrant_collection_name}")
+
+    if not client.collection_exists(qdrant_collection_name):
+        logger.info(f"Collection '{qdrant_collection_name}' not found. Creating...")
 
         try:
             dummy_vec = embedding_model.embed_query("test")
@@ -247,24 +246,24 @@ def _setup_qdrant(
             dim = 1536
 
         client.create_collection(
-            collection_name=collection_name,
+            collection_name=qdrant_collection_name,
             vectors_config=VectorParams(
                 size=dim,
                 distance=Distance.COSINE
             ),
             hnsw_config=HnswConfigDiff(
-                m=32,                     # graph connectivity (higher = better recall)
-                ef_construct=256,         # build-time accuracy
-                full_scan_threshold=10000
+                m=Config.QDRANT_HNSW_M,                     # graph connectivity (higher = better recall)
+                ef_construct=Config.QDRANT_HNSW_EF_CONSTRUCT,         # build-time accuracy
+                full_scan_threshold=Config.QDRANT_HNSW_FULL_SCAN_THRESHOLD
             ),
             optimizers_config=OptimizersConfigDiff(
-                indexing_threshold=20000,     # index after enough points
-                memmap_threshold=50000,       # move vectors to mmap (RAM saver)
-                default_segment_number=2      # balanced segments
+                indexing_threshold=Config.QDRANT_INDEXING_THRESHOLD,     # index after enough points
+                memmap_threshold=Config.QDRANT_MEMMAP_THRESHOLD,      # Keep 100k+ vectors in RAM for speed
+                default_segment_number=Config.QDRANT_SEGMENT_NUMBER      # balanced segments
             ),
             wal_config=WalConfigDiff(
-                wal_capacity_mb=64,
-                wal_segments_ahead=2
+                wal_capacity_mb=Config.QDRANT_WAL_CAPACITY_MB,
+                wal_segments_ahead=Config.QDRANT_WAL_SEGMENTS_AHEAD
             )
         )
 
@@ -277,7 +276,8 @@ def _setup_qdrant(
         bridge_config = {
             "collection": {
                 "vector_db_type": "Qdrant",
-                "collection_name": collection_name
+                "collection_name": qdrant_collection_name, 
+                "original_name": collection_name 
             },
             "embedding": embedding_config
         }
@@ -292,7 +292,7 @@ def _setup_qdrant(
     # 5. Initialize VectorStore
     vector_store = QdrantVectorStore(
         client=client,
-        collection_name=collection_name,
+        collection_name=qdrant_collection_name,
         embedding=embedding_model,
     )
 
@@ -333,16 +333,25 @@ def setup_vector_store(
     """
     logger.info(f"Setting up vector store: {collection_name} (type: {db_type})")
     
-    if db_type not in SUPPORTED_VECTOR_DBS:
+    # Normalize input to match supported types
+    db_type_normalized = None
+    for supported in SUPPORTED_VECTOR_DBS:
+        if supported.lower() == db_type.lower():
+            db_type_normalized = supported
+            break
+            
+    if not db_type_normalized:
         raise ValueError(f"Unsupported vector DB type: {db_type}. Supported: {SUPPORTED_VECTOR_DBS}")
+    
+    # Use normalized type
+    db_type = db_type_normalized
     
     # Get embedding model
     embedding_model = _get_embedding_model(embedding_config)
-    is_gemini = isinstance(embedding_model, GoogleGenerativeAIEmbeddings)
     
     # Setup appropriate vector store
     if db_type == "FAISS":
-        vector_store = _setup_faiss(documents, embedding_model, collection_name, is_gemini, db_config, embedding_config)
+        vector_store = _setup_faiss(documents, embedding_model, collection_name, db_config, embedding_config)
     elif db_type == "Qdrant":
         return _setup_qdrant(documents, embedding_model, collection_name, db_config, embedding_config)
     

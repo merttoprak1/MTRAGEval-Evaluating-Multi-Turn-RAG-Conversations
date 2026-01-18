@@ -13,7 +13,7 @@
       ],
       "console": "integratedTerminal",
       "justMyCode": false,
-      "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+      "python": "${workspaceFolder}/.venv/bin/python"
     }
   ]
 }

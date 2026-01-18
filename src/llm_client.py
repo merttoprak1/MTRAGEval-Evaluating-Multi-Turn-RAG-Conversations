@@ -1,5 +1,6 @@
 from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
+# Removed Google/OpenAI Specific Imports
 
 def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name: str = "gpt-3.5-turbo"):
     """
@@ -11,25 +12,8 @@ def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name
         base_url: Base URL for Local server (e.g., "http://localhost:11434/v1")
         model_name: Model name to use
     """
-    if provider == "OpenAI":
-        if not api_key:
-            raise ValueError("API Key is required for OpenAI provider.")
-        return ChatOpenAI(
-            api_key=api_key,
-            model=model_name,
-            temperature=0.1
-        )
     
-    elif provider == "Gemini":
-        if not api_key:
-            raise ValueError("API Key is required for Gemini provider.")
-        return ChatGoogleGenerativeAI(
-            google_api_key=api_key,
-            model=model_name,
-            temperature=0.1
-        )
-
-    elif provider == "Local":
+    if provider == "Local":
         if not base_url:
             raise ValueError("Base URL is required for Local provider.")
         
@@ -42,4 +26,6 @@ def get_llm(provider: str, api_key: str = None, base_url: str = None, model_name
         )
     
     else:
+        if provider in ["OpenAI", "Gemini"]:
+            raise ValueError(f"Provider '{provider}' has been removed/disabled.")
         raise ValueError(f"Unsupported provider: {provider}")

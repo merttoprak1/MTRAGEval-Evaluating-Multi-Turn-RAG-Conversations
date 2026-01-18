@@ -9,9 +9,6 @@ from qdrant_client import QdrantClient
 
 from src.file_manager import FileManager
 from src.embeddings import LocalOllamaEmbeddings
-from langchain_openai import OpenAIEmbeddings
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -24,30 +21,13 @@ def _get_embedding_model(embedding_config: dict):
     Factory function to create embedding model based on config.
     """
     if not embedding_config:
-        logger.warning("No embedding config provided, falling back to OpenAI default")
-        return OpenAIEmbeddings()
+        logger.warning("No embedding config provided, falling back to Local default")
+        return LocalOllamaEmbeddings(base_url=Config.LOCAL_EMBEDDING_BASE_URL, model="nomic-embed-text")
     
-    provider = embedding_config.get("provider", "OpenAI")
+    provider = embedding_config.get("provider", "Local")
     logger.info(f"Using embedding provider: {provider}")
     
-    if provider == "OpenAI":
-        api_key = embedding_config.get("api_key")
-        model_name = embedding_config.get("model_name", "text-embedding-3-small")
-        if not api_key:
-            logger.error("API Key missing for OpenAI embeddings")
-            raise ValueError("API Key is required for OpenAI embeddings.")
-        logger.info(f"Using OpenAI embedding model: {model_name}")
-        return OpenAIEmbeddings(api_key=api_key, model=model_name)
-        
-    elif provider == "Gemini":
-        api_key = embedding_config.get("api_key")
-        if not api_key:
-            logger.error("API Key missing for Gemini embeddings")
-            raise ValueError("API Key is required for Gemini embeddings.")
-        model_name = embedding_config.get("model_name", "models/embedding-001")
-        return GoogleGenerativeAIEmbeddings(google_api_key=api_key, model=model_name)
-        
-    elif provider == "Local":
+    if provider == "Local":
         base_url = embedding_config.get("base_url")
         model_name = embedding_config.get("model_name")
         logger.info(f"Configuring Local embeddings: URL={base_url}, Model={model_name}")
@@ -57,6 +37,8 @@ def _get_embedding_model(embedding_config: dict):
         return LocalOllamaEmbeddings(base_url=base_url, model=model_name)
     
     else:
+        if provider in ["OpenAI", "Gemini"]:
+            raise ValueError(f"Provider '{provider}' has been removed/disabled.")
         raise ValueError(f"Unsupported embedding provider: {provider}")
 
 def _load_faiss(

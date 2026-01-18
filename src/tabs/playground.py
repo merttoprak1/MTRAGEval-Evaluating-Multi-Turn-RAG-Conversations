@@ -20,7 +20,10 @@ from src.filename_utils import generate_prediction_filename, generate_taskc_gene
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from app import logger
+
+# from app import logger # Removed to avoid circular import
+logger = logging.getLogger(__name__)
+
 from src.reranker import get_reranker, RERANKER_TYPES, FLASHRANK_MODELS, BGE_MODELS
 import time
 
@@ -54,12 +57,13 @@ def run_task_a_retrieval(
     output_dir: str = "predictions/task_a",
     rewrite_dir: str = "predictions/task_a",
     rerank_enabled: bool = False,
-    rerank_top_k: int = 5,
+    rerank_top_k: int = 10,
     reranker_type: str = "flashrank",
     reranker_model: str = None,
     vector_db_type: str = None,
     embedding_model: str = None,
-    global_llm_name: str = None
+    global_llm_name: str = None,
+    timestamp: str = None
 ) -> str:
     """
     Execute Task A retrieval logic.
@@ -139,10 +143,12 @@ def run_task_a_retrieval(
             db_type = db_info.get("vector_db_type", "FAISS")
             
             # 3. Initialize Correct Store
-            # 3. Initialize Correct Store
+            # Use real collection name from info.json if available (for Qdrant composite names), otherwise fallback to folder name
+            real_collection_name = db_info.get("collection_name", target_info['name'])
+            
             vs = get_vector_store(
                 embedding_config=embed_cfg, 
-                collection_name=target_info['name'],
+                collection_name=real_collection_name, 
                 db_type=db_type,
                 db_config=db_info
             )
@@ -247,11 +253,8 @@ def run_task_a_retrieval(
                 }
                 items_to_process.append(parsed_item)
             else:
-                pass # Skip non-MTRAG lines silently or log warning if needed? 
-                # Original logged warning, let's keep it clean or just skip.
-                # The user verified their file is MTRAG, so clean skip is fine or warning.
-                # Original had warning.
-                # logger.warning(f"Skipping line {line_idx}: not in MTRAG format")
+                pass 
+
     
     if not items_to_process:
         logger.warning(f"No valid items found in {input_file_path}")
@@ -284,7 +287,9 @@ def run_task_a_retrieval(
     # Save predictions
     os.makedirs(output_dir, exist_ok=True)
     
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    if not timestamp:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
     filename_base = generate_prediction_filename(
         task_type=output_filename_prefix,
         timestamp=timestamp,
@@ -328,7 +333,8 @@ def run_task_b_generation(
     has_reranker: bool = False,
     reranker_model: str = None,
     top_k_reranker: int = None,
-    query_rewritten: bool = False
+    query_rewritten: bool = False,
+    timestamp: str = None
 ) -> str:
     """
     Execute Task B generation logic.
@@ -407,7 +413,8 @@ def run_task_b_generation(
     # Save output
     os.makedirs(output_dir, exist_ok=True)
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    if not timestamp:
+         timestamp = time.strftime("%Y%m%d_%H%M%S")
     
     # Use Task C format if retrieval params are provided, otherwise Task B format
     if vector_db_type or embedding_model or top_k is not None:
@@ -448,30 +455,22 @@ def render():
     llm_col1, llm_col2, llm_col3 = st.columns(3)
     
     with llm_col1:
-        provider = st.selectbox("Select LLM Provider", ["OpenAI", "Gemini", "Local"], index=2, key="llm_type")
+        provider = st.selectbox("Select LLM Provider", ["Local"], index=0, key="llm_type")
     
     with llm_col2:
         api_key = None
         base_url = None
         model_name = "gpt-3.5-turbo"
-        if provider == "OpenAI":
-            api_key = st.text_input("OpenAI API Key", type="password", key="llm_type_openai")
-        elif provider == "Gemini":
-            api_key = st.text_input("Google API Key", type="password", key="llm_type_gemini")
-        else:
-            base_url = st.text_input("Local LLM Base URL", value="http://localhost:1234/v1",key="llm_type_local")
+        base_url = st.text_input("Local LLM Base URL", value="http://localhost:1234/v1",key="llm_type_local")
+        
     with llm_col3:
         model_name = st.text_input("Custom Model Name", key="llm_model_name", value="openai/gpt-oss-20b")
     st.divider()
     st.subheader("Global Embedding Provider")
             
-    embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2)
-    if embedding_provider in ("OpenAI", "Gemini"):
-        embedding_api_key = st.text_input(f"{embedding_provider} Embedding API Key", type="password")
-        embedding_config = {"provider": embedding_provider, "api_key": embedding_api_key}
-    else:
-        embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434")
-        embedding_config = {"provider": "Local", "base_url": embed_base_url}
+    embedding_provider = st.selectbox("Embedding Provider", ["Local"], index=0)
+    embed_base_url = st.text_input("Embedding Base URL", value="http://localhost:11434")
+    embedding_config = {"provider": "Local", "base_url": embed_base_url}
     st.divider()
 
     # Task Selector
@@ -518,7 +517,7 @@ def render():
         if sel_model and sel_model != "No Models Found":
             avail_cols = FileManager.list_collections(sel_db, sel_model)
             
-        selected_col_names = st.multiselect("3. Select Collections", avail_cols, default=avail_cols[:1] if avail_cols else None)
+        selected_col_names = st.multiselect("3. Select Collections", avail_cols, default=avail_cols if avail_cols else None)
         
         # Construct the active_collections list of dicts
         for name in selected_col_names:
@@ -546,11 +545,11 @@ def render():
         
         with conf_col1:
             # Threading Configuration
-            max_workers = st.slider("Concurrent Worker Threads", min_value=1, max_value=16, value=4, help="Increase this for higher throughput if your LLM/Server can handle parallel requests.")
+            max_workers = st.slider("Concurrent Worker Threads", min_value=1, max_value=16, value=1, help="Increase this for higher throughput if your LLM/Server can handle parallel requests.")
 
         with conf_col2:
                 # Retrieval Settings Override
-                task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
+                task_a_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=20)
 
         # --- Query Rewrite Configuration ---
         with st.expander("✏️ Query Rewrite Configuration", expanded=True):
@@ -599,7 +598,7 @@ def render():
                     disabled=not rerank_enabled_a
                 )
             
-            rerank_top_k_a = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_a", disabled=not rerank_enabled_a)
+            rerank_top_k_a = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=10, key="rerank_top_k_a", disabled=not rerank_enabled_a)
             
             if reranker_type_a == "bge":
                 st.warning("⚠️ BGE requires sentence-transformers and PyTorch. Make sure they are installed.")
@@ -632,6 +631,7 @@ def render():
                 if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                     llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
 
+                logger.info(f"Starting Task A Retrieval with {max_workers} threads. Collections: {[c['name'] for c in active_collections]}")
                 st.write(f"Processing with {max_workers} threads...")
                 progress_bar = st.progress(0)
                 start_time = time.time()
@@ -659,6 +659,7 @@ def render():
                 
                 progress_bar.progress(1.0)
                 total_time = time.time() - start_time
+                logger.info(f"Task A Retrieval complete in {total_time:.2f}s. Output: {predictions_path}")
                 st.success(f"✅ Retrieval complete in {total_time:.2f}s")
                 st.success(f"✅ Predictions saved locally to: `{predictions_path}`")
 
@@ -693,7 +694,7 @@ def render():
             value=PROMPT_TEMPLATES,
             height=200
         )
-        max_workers = st.slider("Concurrent Worker Threads", min_value=1, max_value=12, value=4, help="Increase this for higher throughput if your LLM/Server can handle parallel requests.")
+        max_workers = st.slider("Concurrent Worker Threads", min_value=1, max_value=12, value=1, help="Increase this for higher throughput if your LLM/Server can handle parallel requests.")
         uploaded_file = st.file_uploader("Upload input File", type=["json", "jsonl"], key="task_b_uploader")
 
         # Check if new file uploaded, reset output
@@ -718,6 +719,7 @@ def render():
                 # Initialize LLM
                 llm = get_llm(provider, api_key, base_url, model_name)
                 
+                logger.info(f"Starting Task B Generation with {max_workers} threads. Model: {model_name}")
                 st.write(f"Processing with {max_workers} threads...")
                 progress_bar = st.progress(0)
                 start_time = time.time()
@@ -735,6 +737,7 @@ def render():
                 
                 progress_bar.progress(1.0)
                 total_time = time.time() - start_time
+                logger.info(f"Task B Generation complete in {total_time:.2f}s. Output: {save_path}")
                 st.success(f"✅ Generation complete in {total_time:.2f}s")
                 st.success(f"✅ Predictions saved locally to: `{save_path}`")
                 
@@ -772,14 +775,14 @@ def render():
         
         with conf_col1:
             # Threading Configuration for Retrieval
-            max_workers_retrieval = st.slider("Retrieval Worker Threads", min_value=1, max_value=16, value=4, help="Concurrent threads for retrieval step.")
+            max_workers_retrieval = st.slider("Retrieval Worker Threads", min_value=1, max_value=16, value=1, help="Concurrent threads for retrieval step.")
         
         with conf_col2:
             # Threading Configuration for Generation
-            max_workers_generation = st.slider("Generation Worker Threads", min_value=1, max_value=12, value=4, help="Concurrent threads for generation step.")
+            max_workers_generation = st.slider("Generation Worker Threads", min_value=1, max_value=12, value=1, help="Concurrent threads for generation step.")
         
         # Retrieval Settings
-        task_c_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=10)
+        task_c_top_k = st.number_input("Top-K Documents", min_value=1, max_value=100, value=20)
 
         
         # --- Query Rewrite Configuration ---
@@ -829,7 +832,7 @@ def render():
                     disabled=not rerank_enabled_c
                 )
             
-            rerank_top_k_c = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=5, key="rerank_top_k_c", disabled=not rerank_enabled_c)
+            rerank_top_k_c = st.number_input("Rerank Top-K", min_value=1, max_value=20, value=10, key="rerank_top_k_c", disabled=not rerank_enabled_c)
             
             if reranker_type_c == "bge":
                 st.warning("⚠️ BGE requires sentence-transformers and PyTorch. Make sure they are installed.")
@@ -876,8 +879,12 @@ def render():
                 if rw_config.get("enabled") and rw_config.get("method") in ["LLM-based", "Hybrid"]:
                     llm_for_rewrite = get_llm(provider, api_key, base_url, model_name)
                 
+                logger.info(f"Starting Task C Pipeline. Retrieval threads: {max_workers_retrieval}, Generation threads: {max_workers_generation}")
                 progress_bar_retrieval = st.progress(0)
                 start_time_retrieval = time.time()
+                
+                # Use shared timestamp for Task C consistency
+                shared_timestamp = time.strftime("%Y%m%d_%H%M%S")
                 
                 # Run Task A
                 predictions_path = run_task_a_retrieval(
@@ -897,7 +904,8 @@ def render():
                     reranker_model=reranker_model_c,
                     vector_db_type=sel_db if sel_db != "No DB Found" else None,
                     embedding_model=sel_model if sel_model != "No Models Found" else None,
-                    global_llm_name=model_name
+                    global_llm_name=model_name,
+                    timestamp=shared_timestamp
                 )
                 
                 progress_bar_retrieval.progress(1.0)
@@ -931,7 +939,9 @@ def render():
                     has_reranker=rerank_enabled_c,
                     reranker_model=reranker_model_c if rerank_enabled_c else None,
                     top_k_reranker=rerank_top_k_c if rerank_enabled_c else None,
-                    query_rewritten=rw_config.get("enabled", False)
+
+                    query_rewritten=rw_config.get("enabled", False),
+                    timestamp=shared_timestamp
                 )
                 
                 progress_bar_generation.progress(1.0)
@@ -943,6 +953,7 @@ def render():
                 st.write("### Task C Summary")
                 total_time = total_time_retrieval + total_time_generation
                 st.success(f"✅ Task C complete in {total_time:.2f}s (Retrieval: {total_time_retrieval:.2f}s, Generation: {total_time_generation:.2f}s)")
+                logger.info(f"Task C Pipeline complete in {total_time:.2f}s. Final Output: {generation_output_path}")
                 st.success(f"✅ Final predictions saved to: `{generation_output_path}`")
                 st.info(f"📄 Intermediate retrieval output: `{predictions_path}`")
                 

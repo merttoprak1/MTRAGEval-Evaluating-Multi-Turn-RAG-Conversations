@@ -23,6 +23,9 @@ from src.beir_utils import (
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from src.calculate_ranking import append_ranking_score
+
+logger = logging.getLogger(__name__)
+
 def render():
     st.header("📊 Batch Evaluation")
     
@@ -241,6 +244,8 @@ def render():
             with st.spinner("Running evaluation..."):
                     import time
                     eval_start = time.time()
+                    logger.info(f"Starting evaluation for {selected_category} with file {eval_dataset_path}")
+
                 
                     # Use the currently running Python interpreter
                     import sys
@@ -274,6 +279,7 @@ def render():
                                 try:
                                     # Get project root (parent of src/tabs/)
                                     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                                    logger.debug(f"Executing Retrieval Eval Command: {run_retrieval_eval_command} in {project_root}")
                                     result = subprocess.run(
                                         run_retrieval_eval_command, 
                                         capture_output=True, 
@@ -307,6 +313,7 @@ def render():
                                         if result.stdout:
                                             st.subheader("📈 Retrieval Metrics")
                                             st.code(result.stdout)
+                                            logger.info("Task A Retrieval Evaluation completed successfully.")
                                         
                                         if os.path.exists(output_path):
                                             with open(output_path, "rb") as f:
@@ -325,6 +332,7 @@ def render():
                                 except Exception as e:
                                     status.update(label="❌ Execution Error", state="error")
                                     st.error(f"Failed to run subprocess: {e}")
+                                    logger.error(f"Failed to run subprocess for Task A eval: {e}", exc_info=True)
 
                         else:
                             st.warning("⚠️ Please upload your retrieval predictions file above")
@@ -356,6 +364,7 @@ def render():
                             with st.status("Evaluating...", expanded=True) as status:
                                 try:
                                     # Run the script
+                                    logger.debug(f"Executing Generation Eval Command: {run_gen_eval_command}")
                                     result = subprocess.run(run_gen_eval_command, capture_output=True, text=True)
                                     
                                     if result.returncode == 0:
@@ -380,6 +389,7 @@ def render():
                                 except Exception as e:
                                     status.update(label="❌ Execution Error", state="error")
                                     st.error(f"Subprocess failed: {e}")
+                                    logger.error(f"Subprocess failed for Task B/C eval: {e}", exc_info=True)
 
                         # 2. PERSISTENT DOWNLOAD BUTTON (Outside the Run block)
                         # This checks if a file exists in session state and renders the button.
