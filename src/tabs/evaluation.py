@@ -191,12 +191,17 @@ def render():
                     
                     filename = task_a_file.name
                     file_path = uploads_dir / filename
-                    
-                    with open(file_path, "wb") as f:
-                        f.write(task_a_file.getvalue())
-                    
                     eval_dataset_path = str(file_path.absolute())
-                    st.success(f"Saved to {eval_dataset_path}")
+                    
+                    # Check if file is new or changed
+                    if "task_a_last_file" not in st.session_state or st.session_state.task_a_last_file != filename:
+                        with open(file_path, "wb") as f:
+                            f.write(task_a_file.getvalue())
+                        
+                        st.session_state.task_a_last_file = filename
+                        st.success(f"Saved to {eval_dataset_path}")
+                    else:
+                        st.info(f"File ready: {eval_dataset_path}")
 
             # --- TASK B/C INPUTS ---
             else:
@@ -216,12 +221,15 @@ def render():
                     # Use original filename (no timestamp prefix, as requested)
                     filename = eval_dataset.name
                     file_path = uploads_dir / filename
-                    
-                    with open(file_path, "wb") as f:
-                        f.write(eval_dataset.getvalue())
-                    
                     eval_dataset_path = str(file_path.absolute())
-                    st.success(f"Saved to {eval_dataset_path}")
+
+                    if "task_bc_last_file" not in st.session_state or st.session_state.task_bc_last_file != filename:
+                        with open(file_path, "wb") as f:
+                            f.write(eval_dataset.getvalue())
+                        st.session_state.task_bc_last_file = filename
+                        st.success(f"Saved to {eval_dataset_path}")
+                    else:
+                        st.info(f"File ready: {eval_dataset_path}")
 
 # ... (inside render function logic later on) ...
                     else:
