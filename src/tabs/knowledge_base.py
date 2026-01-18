@@ -111,7 +111,7 @@ def render():
             
         else:
             # Standard Selection Logic
-            embedding_provider = st.selectbox("Embedding Provider", ["OpenAI", "Gemini", "Local"], index=2, key="kb_prov_new")
+            embedding_provider = st.selectbox("Embedding Provider", ["Local"], index=0, key="kb_prov_new")
             
             embedding_api_key = None
             embed_base_url = None
@@ -121,28 +121,17 @@ def render():
                 "nomic-embed-text": {"dim": 768},
                 "mxbai-embed-large": {"dim": 1024},
                 "all-minilm": {"dim": 384},
+                "all-minilm:l6-v2": {"dim": 384},
             }
             
-            if embedding_provider in ("OpenAI", "Gemini"):
-                embedding_api_key = st.text_input(f"{embedding_provider} API Key", type="password", key="kb_new_key")
-                if embedding_provider == "OpenAI":
-                    model_name = "text-embedding-3-small" 
-                else:
-                    model_name = "models/text-embedding-004"
-                
-                embedding_config = {
-                    "provider": embedding_provider, 
-                    "api_key": embedding_api_key, 
-                    "model_name": model_name
-                }
-            else: # Local
-                embed_base_url = st.text_input("Base URL", value="http://localhost:11434", key="kb_new_url")
-                model_name = st.selectbox("Model", list(LOCAL_EMBEDDING_MODELS.keys()), index=0, key="kb_new_local_model")
-                embedding_config = {
-                    "provider": "Local", 
-                    "base_url": embed_base_url, 
-                    "model_name": model_name
-                }
+            # Local Provider Logic
+            embed_base_url = st.text_input("Base URL", value="http://localhost:11434", key="kb_new_url")
+            model_name = st.selectbox("Model", list(LOCAL_EMBEDDING_MODELS.keys()), index=0, key="kb_new_local_model")
+            embedding_config = {
+                "provider": "Local", 
+                "base_url": embed_base_url, 
+                "model_name": model_name
+            }
             
             # Check if this new collection would overwrite an existing one
             target_path = FileManager.get_collection_path(selected_db_type, model_name, selected_collection_name)
@@ -169,6 +158,7 @@ def render():
                 documents = load_json_documents(tmp_file_path)
                 
                 if documents:
+                    logger.info(f"Starting ingestion of {len(documents)} documents into {selected_collection_name} ({selected_db_type})")
                     # Configuration for vector store
                     vd_config = {"vector_db_type": selected_db_type}
                     
@@ -181,7 +171,9 @@ def render():
                     )
                     
                     st.success(f"Successfully ingested {len(documents)} documents.")
-                    st.info(f"Saved to: `{FileManager.get_collection_path(selected_db_type, embedding_config.get('model_name', 'default'), selected_collection_name)}`")
+                    saved_path = FileManager.get_collection_path(selected_db_type, embedding_config.get('model_name', 'default'), selected_collection_name)
+                    st.info(f"Saved to: `{saved_path}`")
+                    logger.info(f"Ingestion complete. Saved {len(documents)} documents to {saved_path}")
                     
                 else:
                     st.error("No valid documents found.")

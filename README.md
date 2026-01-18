@@ -8,7 +8,22 @@ A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRA
 - **Multi-Provider LLM Support**: Choose any local model suitable for your machine from Ollama or Google AI Studio
 - **BEIR Format Support**: Standard benchmark data format for retrieval tasks
 - **Multi-Turn History**: Proper conversation context handling for chat-based evaluation
-- **Vector Store Options**: FAISS support (and Qdrant soon)
+- **Vector Store Options**: FAISS and Qdrant support
+
+## Qdrant Setup (Docker)
+
+To usage Qdrant as your vector store, you can run it via Docker using the official image:
+
+```bash
+# 1. Pull the official Qdrant image
+docker pull qdrant/qdrant
+
+# 2. Run Qdrant with persistent storage
+# This maps port 6333 (API) and 6334 (GRPC) and creates a local 'qdrant_storage' directory
+docker run -p 6333:6333 -p 6334:6334 \
+    -v "$(pwd)/qdrant_storage:/qdrant/storage:z" \
+    qdrant/qdrant
+```
 
 ## Quick Start
 
