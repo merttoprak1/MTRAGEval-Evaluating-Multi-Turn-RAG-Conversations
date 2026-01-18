@@ -9,6 +9,7 @@ import logging
 import sys
 import json
 import concurrent.futures
+import time
 from pathlib import Path
 from datetime import datetime
 from src.ingestion import load_json_documents, load_beir_queries
@@ -232,6 +233,103 @@ def render():
                         st.info(f"File ready: {eval_dataset_path}")
 
 # ... (inside render function logic later on) ...
+                    with st.spinner("Running evaluation..."):
+                    eval_start = time.time()
+                    logger.info(f"Starting evaluation for {selected_category} with file {eval_dataset_path}")
+
+                
+                    # Use the currently running Python interpreter
+                    import sys
+                    venv_python = sys.executable
+                    
+                    if selected_category == "Task A":
+                        # Task A: Run retrieval evaluation
+                        st.subheader("📊 Task A Retrieval Evaluation")
+                        
+                        st.info(f"""
+                        **Evaluation Configuration:**
+                        - Corpus: **Auto-Detected**
+                        - Query Type: **All Questions**
+                        """)
+                        
+                        task_a_predictions_path = eval_dataset_path 
+                        
+                        if task_a_predictions_path:
+                            output_path = task_a_predictions_path.replace(".jsonl", "_results.json").replace(".json", "_results.json")
+                            
+                            run_retrieval_eval_command = [
+                                venv_python, "src/evaluation/run_retrieval_eval.py",
+                                "--input_file", task_a_predictions_path,
+                                "--output_file", output_path,
+                            ]
+                            
+                            with st.status("Running Retrieval Evaluation...", expanded=True) as status:
+                                st.write("📂 Input file:", task_a_predictions_path)
+                                st.write("📊 Running official MTRAG retrieval evaluation...")
+                                
+                                try:
+                                    # Get project root (parent of src/tabs/)
+                                    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                                    logger.debug(f"Executing Retrieval Eval Command: {run_retrieval_eval_command} in {project_root}")
+                                    result = subprocess.run(
+                                        run_retrieval_eval_command, 
+                                        capture_output=True, 
+                                        text=True,
+                                        cwd=project_root)                                
+                                    if result.returncode == 0:
+                                        status.update(label="✅ Retrieval Evaluation Complete!", state="complete")
+                                               
+                                        aggregate_csv = os.path.splitext(output_path)[0] + "_aggregate.csv"
+                                        if os.path.exists(aggregate_csv):
+                                            df_agg = pd.read_csv(aggregate_csv)
+                                            last_row = df_agg.iloc[-1]
+                                            ndcg_values = ast.literal_eval(last_row['nDCG'])
+                                            recall_values = ast.literal_eval(last_row['Recall'])
+                                            row_data = {
+                                                'R@1': recall_values[0],
+                                                'R@3': recall_values[1],
+                                                'R@5': recall_values[2],
+                                                'R@10': recall_values[3],
+                                                'nDCG@1': ndcg_values[0],
+                                                'nDCG@3': ndcg_values[1],
+                                                'nDCG@5': ndcg_values[2],
+                                                'nDCG@10': ndcg_values[3]
+                                            }
+                                            display_df = pd.DataFrame([row_data])
+                                            st.table(display_df)
+                                            st.subheader("📋 Aggregate Results")
+                                            st.dataframe(df_agg)
+
+                                            
+                                        if result.stdout:
+                                            st.subheader("📈 Retrieval Metrics")
+                                            st.code(result.stdout)
+                                            logger.info("Task A Retrieval Evaluation completed successfully.")
+                                        
+                                        if os.path.exists(output_path):
+                                            with open(output_path, "rb") as f:
+                                                st.download_button(
+                                                    label="📥 Download Enriched Results",
+                                                    data=f,
+                                                    file_name="retrieval_eval_results.jsonl",
+                                                    mime="application/json"
+                                                )
+                                    else:
+                                        status.update(label="❌ Evaluation Failed", state="error")
+                                        st.error("Evaluation script failed")
+                                        if result.stderr:
+                                            st.error(result.stderr)
+                                            
+                                except Exception as e:
+                                    status.update(label="❌ Execution Error", state="error")
+                                    st.error(f"Failed to run subprocess: {e}")
+                                    logger.error(f"Failed to run subprocess for Task A eval: {e}", exc_info=True)
+
+                        else:
+                            st.warning("⚠️ Please upload your retrieval predictions file above")
+
+                        eval_time = time.time() - eval_start
+                        st.caption(f"⏱️ Completed in {eval_time:.2f}s")
                     else:
                         # --- Task B/C: Generation Eval ---
                         # Determine task folder name
