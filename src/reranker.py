@@ -155,11 +155,7 @@ class BGEReranker(BaseReranker):
             from sentence_transformers import CrossEncoder
             
             logger.info(f"Loading BGE model: {self.model_name}")
-            self.model = CrossEncoder(
-                self.model_name, 
-                trust_remote_code=True,
-                automodel_args={"trust_remote_code": True}
-            )
+            self.model = CrossEncoder(self.model_name)
             logger.info("BGE model loaded successfully")
             
         except ImportError:
@@ -168,7 +164,6 @@ class BGEReranker(BaseReranker):
         except Exception as e:
             logger.error(f"Failed to load BGE model: {e}")
             raise
-    
     def rerank(
         self, 
         query: str, 
@@ -203,7 +198,6 @@ class BGEReranker(BaseReranker):
                 return reranked[:top_k]
             
             return reranked
-            
         except Exception as e:
             logger.error(f"BGE reranking failed: {e}")
             return documents
