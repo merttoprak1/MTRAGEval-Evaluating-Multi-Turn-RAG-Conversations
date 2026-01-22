@@ -155,7 +155,11 @@ class BGEReranker(BaseReranker):
             from sentence_transformers import CrossEncoder
             
             logger.info(f"Loading BGE model: {self.model_name}")
-            self.model = CrossEncoder(self.model_name)
+            self.model = CrossEncoder(
+                self.model_name, 
+                trust_remote_code=True,
+                automodel_args={"trust_remote_code": True}
+            )
             logger.info("BGE model loaded successfully")
             
         except ImportError:
@@ -205,6 +209,108 @@ class BGEReranker(BaseReranker):
             return documents
 
 
+class TransformerReranker(BaseReranker):
+    """
+    Reranker using Hugging Face Transformers directly.
+    
+    Supports custom architectures (like Qwen) and manual control over loading
+    (e.g. trust_remote_code=True).
+    """
+    
+    def __init__(self, model_name: str = "Qwen/Qwen3-Reranker-8B"):
+        self.model_name = model_name
+        self.tokenizer = None
+        self.model = None
+        self.device = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Load the model and tokenizer."""
+        try:
+            import torch
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification
+            
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading Transformer model: {self.model_name} on {self.device}")
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name, 
+                trust_remote_code=True
+            )
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                self.model_name, 
+                trust_remote_code=True,
+                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            ).to(self.device)
+            self.model.eval()
+            
+            logger.info("Transformer model loaded successfully")
+            
+        except ImportError:
+            logger.error("transformers or torch not installed. Run: pip install transformers torch")
+            raise ImportError("Please install transformers and torch")
+        except Exception as e:
+            logger.error(f"Failed to load Transformer model: {e}")
+            raise
+
+    def rerank(
+        self, 
+        query: str, 
+        documents: list[dict], 
+        top_k: Optional[int] = None,
+        score_field: str = "rerank_score"
+    ) -> list[dict]:
+        """Rerank documents based on query relevance."""
+        if not documents:
+            return documents
+        
+        if self.model is None or self.tokenizer is None:
+            logger.warning("Transformer model not loaded, returning original order")
+            return documents
+        
+        try:
+            import torch
+            
+            pairs = [[query, doc.get("text", "")] for doc in documents]
+            
+            with torch.no_grad():
+                inputs = self.tokenizer(
+                    pairs, 
+                    padding=True, 
+                    truncation=True, 
+                    return_tensors="pt", 
+                    max_length=512
+                ).to(self.device)
+                
+                outputs = self.model(**inputs)
+                
+                # Assume the model outputs logits where higher is better.
+                # Common for rerankers: single output logit or class 1 logit.
+                if outputs.logits.shape[1] == 1:
+                    scores = outputs.logits.squeeze(-1).float().cpu().numpy()
+                else:
+                    # Generic handling: Assume binary classification (related/unrelated) 
+                    # and take the logit for the 'positive' class (index 1).
+                    # This might need adjustment for specific models.
+                    scores = outputs.logits[:, 1].float().cpu().numpy()
+            
+            # Attach scores
+            for doc, score in zip(documents, scores):
+                doc[score_field] = float(score)
+            
+            # Sort
+            reranked = sorted(documents, key=lambda x: x.get(score_field, 0), reverse=True)
+            
+            if top_k is not None and top_k > 0:
+                return reranked[:top_k]
+            
+            return reranked
+            
+        except Exception as e:
+            logger.error(f"Transformer reranking failed: {e}")
+            return documents
+
+
 def get_reranker(
     reranker_type: str = "flashrank",
     model_name: Optional[str] = None
@@ -213,8 +319,8 @@ def get_reranker(
     Get a cached reranker instance.
     
     Args:
-        reranker_type: "flashrank" or "bge"
-        model_name: Optional model name. If None, uses default for the type.
+        reranker_type: "flashrank", "bge", or "other"
+        model_name: Optional model name.
     
     Returns:
         Reranker instance
@@ -225,6 +331,8 @@ def get_reranker(
     if model_name is None:
         if reranker_type == "flashrank":
             model_name = "ms-marco-MiniLM-L-12-v2"
+        elif reranker_type == "other":
+            model_name = "Qwen/Qwen3-Reranker-8B"
         else:
             model_name = "BAAI/bge-reranker-base"
     
@@ -235,7 +343,9 @@ def get_reranker(
             _reranker_cache[cache_key] = FlashRanker(model_name)
         elif reranker_type == "bge":
             _reranker_cache[cache_key] = BGEReranker(model_name)
+        elif reranker_type == "other":
+            _reranker_cache[cache_key] = TransformerReranker(model_name)
         else:
-            raise ValueError(f"Unknown reranker type: {reranker_type}. Use 'flashrank' or 'bge'.")
+            raise ValueError(f"Unknown reranker type: {reranker_type}. Use 'flashrank', 'bge', or 'other'.")
     
     return _reranker_cache[cache_key]
