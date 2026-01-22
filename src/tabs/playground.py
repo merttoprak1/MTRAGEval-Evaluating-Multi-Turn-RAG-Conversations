@@ -24,7 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 # from app import logger # Removed to avoid circular import
 logger = logging.getLogger(__name__)
 
-from src.reranker import get_reranker, RERANKER_TYPES, FLASHRANK_MODELS, BGE_MODELS
+from src.reranker import get_reranker, RERANKER_TYPES, FLASHRANK_MODELS, BGE_MODELS, OTHER_MODELS
 import time
 
 PROMPT_TEMPLATES = """
@@ -587,6 +587,8 @@ def render():
                 # Show model options based on selected reranker type
                 if reranker_type_a == "flashrank":
                     model_options = FLASHRANK_MODELS
+                elif reranker_type_a == "other":
+                    model_options = OTHER_MODELS
                 else:
                     model_options = BGE_MODELS
                 

@@ -18,7 +18,8 @@ _reranker_cache: dict = {}
 # Available reranker types
 RERANKER_TYPES = {
     "flashrank": "FlashRank (Lightweight, Fast)",
-    "bge": "BGE Reranker (Higher Quality, Requires PyTorch)"
+    "bge": "BGE Reranker (Higher Quality, Requires PyTorch)",
+    "other": "Other"
 }
 
 FLASHRANK_MODELS = {
@@ -31,6 +32,12 @@ BGE_MODELS = {
     "BAAI/bge-reranker-base": "BGE Base (Default)",
     "BAAI/bge-reranker-large": "BGE Large (Higher Quality)",
     "BAAI/bge-reranker-v2-m3": "BGE v2 M3 (Multilingual)"
+}
+
+OTHER_MODELS = {
+    "Qwen/Qwen3-Reranker-8B": "Qwen/Qwen3-Reranker-8B",
+    "cross-encoder/ms-marco-MiniLM-L6-v2": "cross-encoder/ms-marco-MiniLM-L6-v2",
+    "mixedbread-ai/mxbai-rerank-xsmall-v1": "mixedbread-ai/mxbai-rerank-xsmall-v1"
 }
 
 
