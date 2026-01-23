@@ -1,0 +1,12 @@
+{
+    "collection": {
+        "vector_db_type": "Qdrant",
+        "collection_name": "cloud_snowflake-arctic-embed_137m",
+        "original_name": "cloud"
+    },
+    "embedding": {
+        "provider": "Local",
+        "base_url": "http://localhost:11434",
+        "model_name": "snowflake-arctic-embed:137m"
+    }
+}

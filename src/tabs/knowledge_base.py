@@ -119,10 +119,9 @@ def render():
             
             LOCAL_EMBEDDING_MODELS = {
                 "nomic-embed-text": {"dim": 768},
-                "mxbai-embed-large": {"dim": 1024},
-                "all-minilm": {"dim": 384},
                 "all-minilm:l6-v2": {"dim": 384},
-                "jina/jina-embeddings-v2-small-en" : {"dim" : 512}
+                "jina/jina-embeddings-v2-small-en" : {"dim" : 512},
+                "snowflake-arctic-embed:137m" : {"dim" : 768 }
             }
             
             # Local Provider Logic
