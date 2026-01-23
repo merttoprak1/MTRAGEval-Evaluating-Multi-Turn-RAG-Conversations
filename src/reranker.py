@@ -35,7 +35,7 @@ BGE_MODELS = {
 }
 
 OTHER_MODELS = {
-    "Qwen/Qwen3-Reranker-8B": "Qwen/Qwen3-Reranker-8B",
+    "jinaai/jina-reranker-v2-base-multilingual": "jinaai/jina-reranker-v2-base-multilingual",
     "cross-encoder/ms-marco-MiniLM-L6-v2": "cross-encoder/ms-marco-MiniLM-L6-v2",
     "mixedbread-ai/mxbai-rerank-xsmall-v1": "mixedbread-ai/mxbai-rerank-xsmall-v1"
 }
@@ -211,7 +211,7 @@ class TransformerReranker(BaseReranker):
     (e.g. trust_remote_code=True).
     """
     
-    def __init__(self, model_name: str = "Qwen/Qwen3-Reranker-8B"):
+    def __init__(self, model_name: str = "jinaai/jina-reranker-v2-base-multilingual"):
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -326,7 +326,7 @@ def get_reranker(
         if reranker_type == "flashrank":
             model_name = "ms-marco-MiniLM-L-12-v2"
         elif reranker_type == "other":
-            model_name = "Qwen/Qwen3-Reranker-8B"
+            model_name = "jinaai/jina-reranker-v2-base-multilingual"
         else:
             model_name = "BAAI/bge-reranker-base"
     
