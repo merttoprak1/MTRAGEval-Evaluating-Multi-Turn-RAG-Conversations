@@ -1,0 +1,12 @@
+{
+    "collection": {
+        "vector_db_type": "Qdrant",
+        "collection_name": "govt_nomic-embed-text",
+        "original_name": "govt"
+    },
+    "embedding": {
+        "provider": "Local",
+        "base_url": "http://localhost:11434",
+        "model_name": "nomic-embed-text"
+    }
+}

@@ -1,0 +1,12 @@
+{
+    "collection": {
+        "vector_db_type": "Qdrant",
+        "collection_name": "fiqa_all-minilm_l6-v2",
+        "original_name": "fiqa"
+    },
+    "embedding": {
+        "provider": "Local",
+        "base_url": "http://localhost:11434",
+        "model_name": "all-minilm:l6-v2"
+    }
+}

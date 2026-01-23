@@ -122,6 +122,7 @@ def render():
                 "mxbai-embed-large": {"dim": 1024},
                 "all-minilm": {"dim": 384},
                 "all-minilm:l6-v2": {"dim": 384},
+                "jina/jina-embeddings-v2-small-en" : {"dim" : 512}
             }
             
             # Local Provider Logic

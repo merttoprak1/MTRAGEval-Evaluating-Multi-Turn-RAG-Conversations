@@ -1,0 +1,12 @@
+{
+    "collection": {
+        "vector_db_type": "Qdrant",
+        "collection_name": "clapnq_all-minilm_l6-v2",
+        "original_name": "clapnq"
+    },
+    "embedding": {
+        "provider": "Local",
+        "base_url": "http://localhost:11434",
+        "model_name": "all-minilm:l6-v2"
+    }
+}
