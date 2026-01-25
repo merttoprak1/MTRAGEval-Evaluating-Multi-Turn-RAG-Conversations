@@ -12,7 +12,7 @@ class LMStudioClient:
     # the server usually loads one specific model, but it's good practice to keep it.
     _params = {
         "temperature": 0.0,   # Keep deterministic for testing
-        "max_tokens": 400,
+        "max_tokens": -1,
         "seed": 100,
     }
 

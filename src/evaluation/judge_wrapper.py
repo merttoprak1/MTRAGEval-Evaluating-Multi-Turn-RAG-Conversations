@@ -263,7 +263,7 @@ def run_ragas_judges_lmstudio(input_file, output_file, model_name):
     lc_client = LMStudioLangChainAdapter(client=raw_client)
 
     # 3. Wrap it for RAGAS (just like the local function does)
-    run_config = RunConfig(timeout=120)
+    run_config = RunConfig(timeout=300, max_workers=1, max_retries=20)
     ragas_llm = LangchainLLMWrapper(lc_client, run_config)
     
     model_predictions = read_json_with_pandas(filepath=f"{input_file}")

@@ -11,7 +11,7 @@ class AzureOpenAIClient():
     _params = {
         "temperature": 0.0,
         "top_p": 1,
-        "max_tokens": 400,
+        "max_tokens": -1,
         "seed": 100,
     }
     
