@@ -1,8 +1,8 @@
 import json
 
 input_jsonl = "data/input_dev/input_task_a_c.jsonl"
-context_jsonl = "data/predictions/task_a/task_a_qr_rr_qdrant_all-minilm-l6-v2_k20_BAAI-bge-reranker-v2-m3_k10_openai-gpt-oss-20b_20260122_142706.jsonl"
-output_jsonl = "data/input_dev/input_task_a_c_w_query_rewrited.jsonl"
+context_jsonl = "data/predictions/task_c/retrieval/task_c_qr_rr_qdrant_all-minilm-l6-v2_k20_BAAI-bge-reranker-v2-m3_k5_google-gemma-3-12b_20260128_191307.jsonl"
+output_jsonl = "data/input_dev/input_task_a_c_w_query_rewrited_w_gemma.jsonl"
 
 # Read rewritten_query from second file (matched by task_id)
 rewritten_map = {}
