@@ -823,6 +823,8 @@ def render():
                 # Show model options based on selected reranker type
                 if reranker_type_c == "flashrank":
                     model_options_c = FLASHRANK_MODELS
+                elif reranker_type_c == "other":
+                    model_options_c = OTHER_MODELS
                 else:
                     model_options_c = BGE_MODELS
                 
