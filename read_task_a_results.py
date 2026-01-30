@@ -44,7 +44,14 @@ def extract_scores(csv_path: Path):
     cell_4 = ast.literal_eval(str(last_row.iloc[3]))
 
     scores = list(cell_3) + list(cell_4)
-    return {f"Score_{i+1}": scores[i] for i in range(8)}
+
+    score_names = [
+        "nDCG@1", "nDCG@3", "nDCG@5", "nDCG@10",
+        "Recall@1", "Recall@3", "Recall@5", "Recall@10"
+    ]
+
+    return dict(zip(score_names, scores))
+
 
 
 def build_score_table_from_folder(folder_path: str, out_csv: str):
