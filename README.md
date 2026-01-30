@@ -97,6 +97,19 @@ python run_mtrag_benchmark.py --corpus clapnq --task rag_taskc --provider Gemini
 | 📚 Knowledge Base         | Configuration & collection set-up |
 | 📝 Logs & Debugging       | For debugging and troubleshooting |
 
+## Screenshots
+
+### Knowledge Base Configuration
+![Knowledge Base](screen_shots/knowledge_base.jpeg)
+
+### Interactive Playground
+![Task A - Retrieval](screen_shots/task_a.jpeg)
+![Task B - Generation](screen_shots/task_b.jpeg)
+![Task C - Full RAG](screen_shots/task_c.jpeg)
+
+### Batch Evaluation
+![Batch Evaluation](screen_shots/batch_evaluation.jpeg)
+
 ## Development
 
 ### Adding New Evaluation Metrics
