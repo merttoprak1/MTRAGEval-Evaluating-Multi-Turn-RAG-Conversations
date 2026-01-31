@@ -5,7 +5,7 @@ A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRA
 ## Features
 
 - **MTRAG Benchmark Integration**: Official multi-turn RAG evaluation from IBM Research
-- **Multi-Provider LLM Support**: Choose any local model suitable for your machine from Ollama or Google AI Studio
+- **Multi-Provider LLM Support**: Choose any local model suitable for your machine from Ollama or LMStudio
 - **BEIR Format Support**: Standard benchmark data format for retrieval tasks
 - **Multi-Turn History**: Proper conversation context handling for chat-based evaluation
 - **Vector Store Options**: FAISS and Qdrant support
