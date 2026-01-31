@@ -1,6 +1,6 @@
 # MTRAGEval - Multi-Turn RAG Evaluation System
 
-A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRAG Benchmark** for evaluating multi-turn conversational AI. Built with Streamlit, LangChain, and FAISS.
+A modular Retrieval-Augmented Generation (RAG) system integrated with the **MTRAG Benchmark** for evaluating multi-turn conversational AI. Built with Streamlit, LangChain, FAISS and Qadrant.
 
 ## Features
 
@@ -27,6 +27,8 @@ docker run -p 6333:6333 -p 6334:6334 \
 
 ## Quick Start
 
+If you are on Windows, make sure you do "git config --system core.longpaths true" before you clone the repository in order to be able to allow cloneing prediction/evaluation results
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -39,9 +41,6 @@ ollama pull llama3
 
 # Run Streamlit UI
 streamlit run app.py
-
-# Or run CLI benchmark
-python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
 ```
 
 ## MTRAG Benchmark
@@ -56,30 +55,16 @@ MTRAG (Multi-Turn RAG) is a comprehensive benchmark dataset from IBM Research fo
 
 ### Running Benchmarks
 
-#### CLI Mode (Coming Soon)
-
-```bash
-# Task A: Retrieval Only
-python run_mtrag_benchmark.py --corpus clapnq --task retrieval_taska --top_k 5
-
-# Task B: Generation (with provided contexts)
-python run_mtrag_benchmark.py --corpus clapnq --task generation_taskb --limit 10
-
-# Task C: Full RAG Pipeline
-python run_mtrag_benchmark.py --corpus clapnq --task rag_taskc --provider Gemini
-```
-
 #### UI Mode
 
 1. Open `http://localhost:8501`
-2. Enter API key in sidebar
-3. Go to **📚 Knowledge Base** tab
-4. Select pre-ingested collection or set up the configurations and select a corpus to ingest
-5. Go to **💬 Interactive Playground** tab
-6. Select a Task (A, B, or C) to perform
-7. Set up Thread and Query Rewrite configurations
-8. Upload a input file in the format "retrieval_taskac_input.jsonl" or "retrieval_taskb_input.jsonl"
-9. Click on "Run Pipeline" and get your results
+2. Go to **📚 Knowledge Base** tab
+3. Select pre-ingested collection or set up the configurations and upload a corpus to ingest
+4. Go to **💬 Interactive Playground** tab
+5. Select a Task (A, B, or C) to perform
+6. Set up configurations necessary for each task accordingly (e.g Query Rewriting settings, Reranker settings, system prompts)
+7. Upload a input file in the format "retrieval_taskac_input.jsonl" or "retrieval_taskb_input.jsonl"
+8. Click on "Run Pipeline" and get your results
 
 ### Evaluation Metrics
 
@@ -90,39 +75,28 @@ python run_mtrag_benchmark.py --corpus clapnq --task rag_taskc --provider Gemini
 
 ## UI Tabs
 
-| Tab                       | Purpose                           |
-| ------------------------- | --------------------------------- |
-| 💬 Interactive Playground | Manual RAG testing (Task A/B/C)   |
-| 📊 Batch Evaluation       | Official benchmark evaluation     |
-| 📚 Knowledge Base         | Configuration & collection set-up |
-| 📝 Logs & Debugging       | For debugging and troubleshooting |
+| Tab                       | Purpose                                                    |
+| ------------------------- | ---------------------------------------------------------- |
+| 💬 Interactive Playground | Generating predictions for each task                       |
+| 📊 Batch Evaluation       | Evaluation of results obtained from Interactive Playground |
+| 📚 Knowledge Base         | Configuration & collection set-up                          |
+| 📝 Logs & Debugging       | For debugging and troubleshooting                          |
 
 ## Screenshots
 
 ### Knowledge Base Configuration
+
 ![Knowledge Base](screen_shots/knowledge_base.jpeg)
 
 ### Interactive Playground
+
 ![Task A - Retrieval](screen_shots/task_a.jpeg)
 ![Task B - Generation](screen_shots/task_b.jpeg)
 ![Task C - Full RAG](screen_shots/task_c.jpeg)
 
 ### Batch Evaluation
+
 ![Batch Evaluation](screen_shots/batch_evaluation.jpeg)
-
-## Development
-
-### Adding New Evaluation Metrics
-
-Extend `src/mtrag_evaluator.py` to add custom metrics or integrate additional MTRAG scripts.
-
-### Troubleshooting
-
-| Issue                    | Solution                              |
-| ------------------------ | ------------------------------------- |
-| Rate limit errors        | Use `--limit` flag or local models    |
-| "No vector store loaded" | Upload and process documents first    |
-| Import errors            | Run `pip install -r requirements.txt` |
 
 ## References
 
